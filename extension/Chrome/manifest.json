@@ -1,0 +1,59 @@
+{
+  "manifest_version": 3,
+  "name": "Movix Proxy Extension",
+  "version": "1.3.3",
+  "description": "Extension proxy pour Live TV Movix - Contourne CORS, injecte les headers et extrait les sources Nexus",
+  "icons": {
+    "16": "movix.png",
+    "48": "movix.png",
+    "128": "movix.png"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "movix.png",
+      "48": "movix.png",
+      "128": "movix.png"
+    },
+    "default_title": "Movix Extension"
+  },
+  "permissions": [
+    "declarativeNetRequest",
+    "declarativeNetRequestWithHostAccess",
+    "storage"
+  ],
+  "host_permissions": ["<all_urls>", "http://*/*", "https://*/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "externally_connectable": {
+    "matches": [
+      "*://localhost/*",
+      "*://movix.blog/*",
+      "*://*.movix.blog/*",
+      "*://movix.rodeo/*",
+      "*://*.movix.rodeo/*",
+      "*://movix.club/*",
+      "*://*.movix.club/*"
+    ]
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "content.js",
+        "injected.js",
+        "extractors.js",
+        "popup.html",
+        "popup.js"
+      ],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}
