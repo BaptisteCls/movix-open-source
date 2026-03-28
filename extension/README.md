@@ -78,4 +78,4 @@ Ces permissions sont nécessaires pour :
 Si tu ne veux pas installer l'extension native, ou si tu préfères Tampermonkey sur un navigateur Chromium, utilise le userscript Movix :
 
 - [README Userscript Movix](../userscript/README.md)
-- [Installation directe de `movix.user.js`](https://github.com/MysticSaba-max/movix-os/raw/refs/heads/main/userscript/movix.user.js)
+- [Installation directe de `movix.user.js`](https://github.com/MysticSaba-max/movix-open-source/raw/refs/heads/main/userscript/movix.user.js)
