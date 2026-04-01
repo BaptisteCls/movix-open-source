@@ -42,6 +42,48 @@ from dotenv import load_dotenv
 # Load local .env from proxiesembed folder
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env'))
 
+
+def _build_socks5_proxy_url(proxy: Any, default_type: str = 'socks5h') -> Optional[str]:
+    """Build a SOCKS proxy URL from either a raw url field or host/port/auth parts."""
+    if not isinstance(proxy, dict):
+        return None
+
+    raw_url = str(proxy.get('url', '') or '').strip()
+    if raw_url:
+        return raw_url
+
+    host = str(proxy.get('host', '') or '').strip()
+    port = str(proxy.get('port', '') or '').strip()
+    if not host or not port:
+        return None
+
+    proxy_type = str(proxy.get('type', default_type) or default_type).strip()
+    auth = str(proxy.get('auth', '') or '').strip()
+    return f"{proxy_type}://{auth}@{host}:{port}" if auth else f"{proxy_type}://{host}:{port}"
+
+
+def _redact_proxy_url(proxy_url: Optional[str]) -> str:
+    if not proxy_url:
+        return 'none'
+    try:
+        if '@' in proxy_url:
+            scheme, rest = proxy_url.split('://', 1) if '://' in proxy_url else ('proxy', proxy_url)
+            _, hostpart = rest.split('@', 1)
+            return f"{scheme}://***@{hostpart}"
+        return proxy_url
+    except Exception:
+        return 'proxy'
+
+
+def _build_aiohttp_socks_proxy_url(proxy: Any, default_type: str = 'socks5') -> Optional[str]:
+    """Build a SOCKS URL compatible with aiohttp_socks/python-socks."""
+    proxy_url = _build_socks5_proxy_url(proxy, default_type=default_type)
+    if not proxy_url:
+        return None
+    if proxy_url.lower().startswith('socks5h://'):
+        return f"socks5://{proxy_url[10:]}"
+    return proxy_url
+
 # ---------------------------------------------------------------------------
 #  WideFrog / DRM Proxy integration
 # ---------------------------------------------------------------------------
@@ -121,11 +163,9 @@ def _build_ftv_proxy_session():
     # Pick a random proxy from the list
     import random as _rand
     proxy = _rand.choice(proxies_list)
-    auth = proxy.get('auth', '')
-    host = proxy.get('host', '')
-    port = proxy.get('port', '')
-    ptype = proxy.get('type', 'socks5h')
-    proxy_url = f"{ptype}://{auth}@{host}:{port}" if auth else f"{ptype}://{host}:{port}"
+    proxy_url = _build_socks5_proxy_url(proxy)
+    if not proxy_url:
+        return None
     sess = sync_requests.Session()
     sess.proxies = {
         'http': proxy_url,
@@ -137,7 +177,7 @@ def _build_ftv_proxy_session():
         'Accept': '*/*',
         'Accept-Language': 'fr-FR,fr;q=0.9,en;q=0.5',
     })
-    logging.getLogger(__name__).info(f'[france.tv] Proxy session created: {ptype}://{host}:{port}')
+    logging.getLogger(__name__).info(f'[france.tv] Proxy session created: {_redact_proxy_url(proxy_url)}')
     return sess
 
 if _WIDEFROG_AVAILABLE:
@@ -1270,15 +1310,15 @@ class ProxyServer:
             return False
     
     def _get_random_proxy(self) -> Dict:
-        return random.choice(PROXIES)
+        valid_proxies = [proxy for proxy in PROXIES if _build_socks5_proxy_url(proxy)]
+        return random.choice(valid_proxies) if valid_proxies else {}
     
     def _create_socks5_connector(self, proxy: Dict) -> ProxyConnector:
         """Create SOCKS5 connector with connection pooling"""
-        return ProxyConnector.from_url(
-            f"socks5://{proxy['auth']}@{proxy['host']}:{proxy['port']}",
-            rdns=True,
-            limit=0
-        )
+        proxy_url = _build_aiohttp_socks_proxy_url(proxy, default_type='socks5')
+        if not proxy_url:
+            raise ValueError('Proxy SOCKS5 invalide')
+        return ProxyConnector.from_url(proxy_url, rdns=True, limit=0)
     
     def setup_routes(self):
         """Configure server routes"""
@@ -1415,6 +1455,12 @@ class ProxyServer:
         if not REAL_DEBRID_TOKEN:
             return web.json_response({'status': 'error', 'error': 'Service de debridage non configure'}, status=503)
 
+        proxy = self._get_random_proxy()
+        proxy_url = _build_socks5_proxy_url(proxy, default_type='socks5')
+        connector_proxy_url = _build_aiohttp_socks_proxy_url(proxy, default_type='socks5')
+        if not proxy_url or not connector_proxy_url:
+            return web.json_response({'status': 'error', 'error': 'Proxy SOCKS5 Real-Debrid non configure'}, status=503)
+
         headers = {
             'Authorization': f'Bearer {REAL_DEBRID_TOKEN}',
             'Accept': 'application/json',
@@ -1425,7 +1471,10 @@ class ProxyServer:
             'password': password or '',
         }
 
-        async with aiohttp.ClientSession() as session:
+        logger.info(f"[DEBRID][REALDEBRID] Using SOCKS5 proxy: {_redact_proxy_url(proxy_url)}")
+        connector = ProxyConnector.from_url(connector_proxy_url, rdns=True, limit=1)
+
+        async with aiohttp.ClientSession(connector=connector) as session:
             async with session.post(
                 'https://app.real-debrid.com/rest/1.0/unrestrict/link',
                 headers=headers,

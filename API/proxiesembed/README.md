@@ -36,8 +36,9 @@ Le fichier `API/proxiesembed/.env.example` couvre les besoins principaux :
 - base de données : `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`
 - exposition publique : `PROXY_BASE`
 - pools proxies : `PROXIES_SOCKS5_JSON`, `SIBNET_PROXY_SOCKS5_JSON`
+  `Real-Debrid` utilise un proxy du pool `PROXIES_SOCKS5_JSON` pour l'appel d'unlock.
 - france.tv : `FRANCETV_EMAIL`, `FRANCETV_PASSWORD`
-- debrid : `DEEPBRID_API_KEY`
+- debrid : `DEEPBRID_API_KEY`, `REAL_DEBRID_TOKEN`
 
 ## Endpoints à connaître
 
@@ -58,7 +59,7 @@ Le fichier `API/proxiesembed/.env.example` couvre les besoins principaux :
 | `GET /drm/manifest` | Réécriture de manifeste HLS ou DASH |
 | `GET /drm/resource` | Proxy de ressources DRM |
 | `GET /drm/b/{base_b64}/{subpath}` | Proxy path-based pour DASH |
-| `POST /api/debrid/unlock` | Unlock de liens debrid |
+| `POST /api/debrid/unlock` | Unlock de liens debrid via Deepbrid ou Real-Debrid |
 
 ## Notes d'architecture
 
