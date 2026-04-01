@@ -3584,6 +3584,10 @@
         "name": "Deepbrid",
         "desc": "Direct link returned by Deepbrid"
       },
+      "realdebrid": {
+        "name": "Real-Debrid",
+        "desc": "Final link generated through the Movix proxy via Real-Debrid"
+      },
       "bestdebrid": {
         "name": "BestDebrid",
         "desc": "Final link fetched directly from the browser"

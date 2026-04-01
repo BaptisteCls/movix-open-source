@@ -202,7 +202,7 @@ interface DebridResult {
   provider: DebridProvider;
 }
 
-type DebridProvider = 'deepbrid' | 'bestdebrid';
+type DebridProvider = 'deepbrid' | 'realdebrid' | 'bestdebrid';
 
 interface DebridHistoryItem {
   originalLink: string;
@@ -219,7 +219,7 @@ const MAX_HISTORY = 50;
 const DEFAULT_PROVIDER: DebridProvider = 'deepbrid';
 
 const isDebridProvider = (value: string | null | undefined): value is DebridProvider =>
-  value === 'deepbrid' || value === 'bestdebrid';
+  value === 'deepbrid' || value === 'realdebrid' || value === 'bestdebrid';
 
 const getHistory = (): DebridHistoryItem[] => {
   try {
@@ -281,7 +281,7 @@ const DebridPage: React.FC = () => {
     return () => clearInterval(interval);
   }, []);
 
-  const providerOptions: DebridProvider[] = ['deepbrid', 'bestdebrid'];
+  const providerOptions: DebridProvider[] = ['deepbrid', 'realdebrid', 'bestdebrid'];
   const isSubmitDisabled = isLoading || !url.trim();
 
   const fetchBestDebridApiKey = useCallback(async (): Promise<string> => {

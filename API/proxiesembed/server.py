@@ -66,7 +66,7 @@ try:
     _WIDEFROG_AVAILABLE = True
     logger_early = logging.getLogger(__name__)
     logger_early.info('[DRM] WideFrog utilities loaded successfully')
-except ImportError as _wf_err:
+except Exception as _wf_err:
     logger_early = logging.getLogger(__name__)
     logger_early.warning(f'[DRM] WideFrog utilities not available: {_wf_err}')
 
@@ -500,9 +500,10 @@ PROXIES = json.loads(os.environ.get('PROXIES_SOCKS5_JSON', '[]'))
 
 SIBNET_PROXY_CONFIG = json.loads(os.environ.get('SIBNET_PROXY_SOCKS5_JSON', '{"type":"socks5h"}'))
 
-DEEPBRID_API_KEY = os.environ.get('DEEPBRID_API_KEY', '')
+DEEPBRID_API_KEY = os.environ.get('DEEPBRID_API_KEY', '').strip()
+REAL_DEBRID_TOKEN = os.environ.get('REAL_DEBRID_TOKEN', '').strip()
 
-DEBRID_PROVIDERS = frozenset({'deepbrid'})
+DEBRID_PROVIDERS = frozenset({'deepbrid', 'realdebrid'})
 
 SIBNET_PROXY = PROXIES[0] if len(PROXIES) > 0 else None
 VIDMOLY_PROXY = PROXIES[1] if len(PROXIES) > 1 else (PROXIES[0] if len(PROXIES) > 0 else None)
@@ -1329,15 +1330,22 @@ class ProxyServer:
         elif isinstance(error, str) and error.strip():
             return error
 
+        details = payload.get('error_details')
+        if isinstance(details, str) and details.strip():
+            return details
+
         message = payload.get('message')
         if isinstance(message, str) and message.strip():
             return message
 
         return fallback
 
-    def _parse_deepbrid_filesize(self, size_str: Any) -> int:
-        """Convert Deepbrid human-readable sizes to bytes."""
-        size_text = str(size_str or '').strip().upper()
+    def _parse_debrid_filesize(self, size_value: Any) -> int:
+        """Convert provider file sizes to bytes."""
+        if isinstance(size_value, (int, float)) and not isinstance(size_value, bool):
+            return max(int(size_value), 0)
+
+        size_text = str(size_value or '').strip().upper()
         try:
             if 'GB' in size_text:
                 return int(float(size_text.replace(' GB', '').replace('GB', '')) * 1073741824)
@@ -1350,6 +1358,21 @@ class ProxyServer:
         except (ValueError, TypeError):
             return 0
         return 0
+
+    def _extract_debrid_link(self, payload: Dict[str, Any]) -> str:
+        for key in ('download', 'link'):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return ''
+
+    def _guess_filename_from_url(self, value: str) -> str:
+        try:
+            parsed = urlparse(value)
+            path = urllib.parse.unquote(parsed.path or '')
+            return path.rsplit('/', 1)[-1].strip()
+        except Exception:
+            return ''
 
     async def _unlock_with_deepbrid(self, link: str, password: str) -> Response:
         """Unlock a link via Deepbrid."""
@@ -1379,13 +1402,71 @@ class ProxyServer:
                 'data': {
                     'link': result.get('link', ''),
                     'filename': result.get('filename', ''),
-                    'filesize': self._parse_deepbrid_filesize(result.get('size', '')),
+                    'filesize': self._parse_debrid_filesize(result.get('size', '')),
                     'host': result.get('hoster', ''),
                 }
             })
 
         error_msg = self._extract_debrid_error_message(result, 'Erreur lors du debridage')
         return web.json_response({'status': 'error', 'error': error_msg}, status=400)
+
+    async def _unlock_with_realdebrid(self, link: str, password: str) -> Response:
+        """Unlock a link via Real-Debrid."""
+        if not REAL_DEBRID_TOKEN:
+            return web.json_response({'status': 'error', 'error': 'Service de debridage non configure'}, status=503)
+
+        headers = {
+            'Authorization': f'Bearer {REAL_DEBRID_TOKEN}',
+            'Accept': 'application/json',
+            'User-Agent': 'movix-proxiesembed/1.0',
+        }
+        form_data = {
+            'link': link,
+            'password': password or '',
+        }
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                'https://app.real-debrid.com/rest/1.0/unrestrict/link',
+                headers=headers,
+                data=form_data,
+                timeout=ClientTimeout(total=30)
+            ) as resp:
+                try:
+                    result = await resp.json(content_type=None)
+                except Exception:
+                    raw_text = (await resp.text()).strip()
+                    result = {'error': raw_text or 'Reponse invalide du provider'}
+                status_code = resp.status
+
+        if isinstance(result, dict):
+            direct_link = self._extract_debrid_link(result)
+            if 200 <= status_code < 300 and direct_link:
+                filename = str(result.get('filename', '') or '').strip()
+                host = str(result.get('host', '') or '').strip()
+
+                if not filename:
+                    filename = self._guess_filename_from_url(direct_link) or self._guess_filename_from_url(link)
+
+                if not host:
+                    host = urlparse(link).netloc.replace('www.', '') or urlparse(direct_link).netloc.replace('www.', '')
+
+                return web.json_response({
+                    'status': 'success',
+                    'data': {
+                        'link': direct_link,
+                        'filename': filename,
+                        'filesize': self._parse_debrid_filesize(result.get('filesize')),
+                        'host': host,
+                    }
+                })
+
+            error_msg = self._extract_debrid_error_message(result, 'Erreur lors du debridage')
+        else:
+            error_msg = 'Erreur lors du debridage'
+
+        error_status = 400 if 400 <= status_code < 500 else 502
+        return web.json_response({'status': 'error', 'error': error_msg}, status=error_status)
 
     async def debrid_unlock_handler(self, request: Request) -> Response:
         """Unlock a link via the selected debrid provider."""
@@ -1395,13 +1476,16 @@ class ProxyServer:
             data = await request.json()
             link = data.get('link', '').strip()
             password = data.get('password', '').strip()
-            provider = str(data.get('provider', 'deepbrid')).strip().lower() or 'deepbrid'
+            provider = (str(data.get('provider', 'deepbrid')).strip().lower() or 'deepbrid').replace('-', '')
 
             if not link:
                 return web.json_response({'status': 'error', 'error': 'Lien manquant'}, status=400)
 
             if provider not in DEBRID_PROVIDERS:
                 return web.json_response({'status': 'error', 'error': 'Provider de debridage invalide'}, status=400)
+
+            if provider == 'realdebrid':
+                return await self._unlock_with_realdebrid(link, password)
 
             return await self._unlock_with_deepbrid(link, password)
 

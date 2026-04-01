@@ -3583,6 +3583,10 @@
         "name": "Deepbrid",
         "desc": "Lien direct renvoyé par Deepbrid"
       },
+      "realdebrid": {
+        "name": "Real-Debrid",
+        "desc": "Lien final généré côté proxy Movix via Real-Debrid"
+      },
       "bestdebrid": {
         "name": "BestDebrid",
         "desc": "Lien final obtenu directement côté navigateur"
