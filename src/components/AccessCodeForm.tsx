@@ -6,8 +6,6 @@ import { X } from 'lucide-react';
 import { useVipModal } from '../context/VipModalContext';
 import { useTranslation } from 'react-i18next';
 
-// Interface SellAuth supprimée car nous utilisons désormais Discord pour les tickets VIP
-
 interface AccessCodeFormProps {
   isModal?: boolean;
   hideNoKeyButton?: boolean;
