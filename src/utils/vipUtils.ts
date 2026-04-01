@@ -1,5 +1,5 @@
 /**
- * vipUtils.ts - Utilitaires centralisés de vérification VIP côté frontend
+ * vipService.ts - Service centralisé de vérification VIP côté frontend
  * 
  * Au lieu de simplement lire localStorage('is_vip'), ce service :
  * 1. Vérifie périodiquement avec le serveur que la clé est toujours valide dans MySQL

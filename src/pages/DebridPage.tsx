@@ -221,6 +221,21 @@ const DEFAULT_PROVIDER: DebridProvider = 'deepbrid';
 const isDebridProvider = (value: string | null | undefined): value is DebridProvider =>
   value === 'deepbrid' || value === 'realdebrid' || value === 'bestdebrid';
 
+const normalizeDebridedLink = (link: string, provider: DebridProvider): string => {
+  const trimmed = link.trim();
+  if (!trimmed || provider !== 'realdebrid') {
+    return trimmed;
+  }
+
+  try {
+    const parsed = new URL(trimmed);
+    parsed.protocol = 'https:';
+    return parsed.toString();
+  } catch {
+    return trimmed.replace(/^http:\/\//i, 'https://');
+  }
+};
+
 const getHistory = (): DebridHistoryItem[] => {
   try {
     const parsed = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
@@ -236,10 +251,15 @@ const getHistory = (): DebridHistoryItem[] => {
         typeof item.host === 'string' &&
         typeof item.timestamp === 'number'
       ))
-      .map((item) => ({
-        ...item,
-        provider: isDebridProvider(item.provider) ? item.provider : DEFAULT_PROVIDER,
-      }));
+      .map((item) => {
+        const provider = isDebridProvider(item.provider) ? item.provider : DEFAULT_PROVIDER;
+
+        return {
+          ...item,
+          provider,
+          debridedLink: normalizeDebridedLink(item.debridedLink, provider),
+        };
+      });
   } catch {
     return [];
   }
@@ -405,15 +425,20 @@ const DebridPage: React.FC = () => {
           throw new Error(extractDebridErrorMessage(data) || t('debrid.error'));
         })();
 
-      setResult(newResult);
+      const normalizedResult: DebridResult = {
+        ...newResult,
+        link: normalizeDebridedLink(newResult.link, newResult.provider),
+      };
+
+      setResult(normalizedResult);
 
       // Save to history
       const historyItem: DebridHistoryItem = {
         originalLink: targetUrl,
-        debridedLink: newResult.link,
-        filename: newResult.filename,
-        filesize: newResult.filesize,
-        host: newResult.host,
+        debridedLink: normalizedResult.link,
+        filename: normalizedResult.filename,
+        filesize: normalizedResult.filesize,
+        host: normalizedResult.host,
         timestamp: Date.now(),
         provider: activeProvider,
       };
@@ -637,7 +662,8 @@ const DebridPage: React.FC = () => {
                       <div className="flex items-center gap-3 pt-2">
                         <a
                           href={result.link}
-                          download={result.filename || true}
+                          target="_blank"
+                          rel="noreferrer"
                           className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-green-600 hover:bg-green-700 rounded-xl text-white font-medium transition-colors"
                         >
                           <Download className="w-5 h-5" />
@@ -712,7 +738,8 @@ const DebridPage: React.FC = () => {
                                 <div className="flex items-center gap-1 flex-shrink-0">
                                   <a
                                     href={item.debridedLink}
-                                    download={item.filename || true}
+                                    target="_blank"
+                                    rel="noreferrer"
                                     className="group/btn p-1.5 text-green-400 hover:bg-green-400/10 rounded-lg transition-colors"
                                     title={t('debrid.downloadBtn')}
                                   >

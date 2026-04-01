@@ -31,6 +31,17 @@ interface PersistResolvedSessionOptions {
   accessToken?: string | null;
 }
 
+interface StoredAuthData {
+  userProfile?: Record<string, unknown>;
+  provider?: string;
+}
+
+interface DecodedJwtPayload {
+  sub?: string;
+  userType?: string;
+  authMethod?: string;
+}
+
 const DEFAULT_AVATAR = 'https://as2.ftcdn.net/v2/jpg/05/89/93/27/1000_F_589932782_vQAEAZhHnq1QCGu5ikwrYaQD0Mmurm0N.webp';
 const PENDING_AUTH_ACTION_KEY = 'movix_pending_auth_action';
 const AUTH_KEYS = [
@@ -57,6 +68,37 @@ function isAuthMethod(value: string | null): value is AuthMethod {
 
 function isResolvedUserType(value: string | null): value is ResolvedUserType {
   return value === 'oauth' || value === 'bip39';
+}
+
+function getStoredAuthData(): StoredAuthData | null {
+  const authStr = localStorage.getItem('auth');
+  if (!authStr) return null;
+
+  try {
+    const parsed = JSON.parse(authStr) as StoredAuthData;
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function decodeJwtPayload(token: string | null): DecodedJwtPayload | null {
+  if (!token) return null;
+
+  const [, rawPayload] = token.split('.');
+  if (!rawPayload) return null;
+
+  try {
+    const normalizedPayload = rawPayload.replace(/-/g, '+').replace(/_/g, '/');
+    const paddedPayload = normalizedPayload.padEnd(
+      normalizedPayload.length + ((4 - (normalizedPayload.length % 4)) % 4),
+      '='
+    );
+    const parsed = JSON.parse(atob(paddedPayload)) as DecodedJwtPayload;
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 function getDiscordAvatar(rawUser?: Record<string, unknown> | null) {
@@ -101,9 +143,13 @@ export function getCurrentAuthMethod(): AuthMethod | null {
   const storedMethod = localStorage.getItem('auth_method');
   if (isAuthMethod(storedMethod)) return storedMethod;
 
+  const tokenPayload = decodeJwtPayload(localStorage.getItem('auth_token'));
+  if (isAuthMethod(tokenPayload?.authMethod || null)) return tokenPayload.authMethod;
+
   if (localStorage.getItem('discord_auth') === 'true') return 'discord';
   if (localStorage.getItem('google_auth') === 'true') return 'google';
   if (localStorage.getItem('bip39_auth') === 'true') return 'bip39';
+  if (tokenPayload?.userType === 'bip39') return 'bip39';
   return null;
 }
 
@@ -111,16 +157,14 @@ export function getResolvedUserType(): ResolvedUserType | null {
   const storedType = localStorage.getItem('resolved_user_type');
   if (isResolvedUserType(storedType)) return storedType;
 
-  const authStr = localStorage.getItem('auth');
-  if (authStr) {
-    try {
-      const auth = JSON.parse(authStr);
-      const provider = auth?.userProfile?.provider || auth?.provider;
-      if (provider === 'bip39') return 'bip39';
-    } catch {
-      // Ignore malformed auth blob.
-    }
-  }
+  const auth = getStoredAuthData();
+  const provider = typeof auth?.userProfile?.provider === 'string'
+    ? auth.userProfile.provider
+    : auth?.provider;
+  if (provider === 'bip39') return 'bip39';
+
+  const tokenPayload = decodeJwtPayload(localStorage.getItem('auth_token'));
+  if (isResolvedUserType(tokenPayload?.userType || null)) return tokenPayload.userType;
 
   return getCurrentAuthMethod() === 'bip39' ? 'bip39' : 'oauth';
 }
@@ -129,16 +173,12 @@ export function getResolvedUserId(): string | null {
   const storedId = localStorage.getItem('resolved_user_id') || localStorage.getItem('user_id');
   if (storedId) return storedId;
 
-  const authStr = localStorage.getItem('auth');
-  if (authStr) {
-    try {
-      const auth = JSON.parse(authStr);
-      const authId = auth?.userProfile?.id;
-      if (authId) return String(authId);
-    } catch {
-      // Ignore malformed auth blob.
-    }
-  }
+  const auth = getStoredAuthData();
+  const authId = auth?.userProfile?.id ?? auth?.userProfile?.userId;
+  if (authId) return String(authId);
+
+  const tokenPayload = decodeJwtPayload(localStorage.getItem('auth_token'));
+  if (tokenPayload?.sub) return tokenPayload.sub;
 
   const method = getCurrentAuthMethod();
   if (method === 'discord') {
@@ -163,16 +203,11 @@ export function getResolvedUserId(): string | null {
 }
 
 export function getResolvedAccountProvider(): AuthMethod | null {
-  const authStr = localStorage.getItem('auth');
-  if (authStr) {
-    try {
-      const auth = JSON.parse(authStr);
-      const provider = auth?.userProfile?.provider || auth?.provider;
-      if (isAuthMethod(provider)) return provider;
-    } catch {
-      // Ignore malformed auth blob.
-    }
-  }
+  const auth = getStoredAuthData();
+  const provider = typeof auth?.userProfile?.provider === 'string'
+    ? auth.userProfile.provider
+    : auth?.provider;
+  if (isAuthMethod(provider || null)) return provider;
 
   return getResolvedUserType() === 'bip39' ? 'bip39' : getCurrentAuthMethod();
 }

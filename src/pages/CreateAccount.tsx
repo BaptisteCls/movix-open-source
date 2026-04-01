@@ -5,7 +5,12 @@ import { Copy, Check, Eye, EyeOff, ArrowLeft, Camera, Shield } from 'lucide-reac
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import AvatarSelector from '../components/AvatarSelector';
-import { clearPendingAuthAction, getPendingAuthAction } from '../utils/accountAuth';
+import {
+  broadcastAuthChange,
+  clearPendingAuthAction,
+  getPendingAuthAction,
+  persistResolvedSession,
+} from '../utils/accountAuth';
 
 const API_URL = import.meta.env.VITE_MAIN_API;
 const TURNSTILE_SITE_KEY = import.meta.env.VITE_TURNSTILE_SITE_KEY;
@@ -224,18 +229,22 @@ const CreateAccount: React.FC<CreateAccountProps> = ({ mode = 'create' }) => {
         }
 
         // Sauvegarder les informations d'authentification
-        localStorage.setItem('auth', JSON.stringify({
-          userProfile: data.userProfile,
-          provider: 'bip39'
-        }));
-        localStorage.setItem('bip39_auth', 'true');
+        persistResolvedSession('bip39', {
+          sessionId: data.sessionId || null,
+          token: data.token || null,
+          account: {
+            userType: 'bip39',
+            userId: data.userProfile?.id || null,
+          },
+          authData: {
+            userProfile: data.userProfile,
+            provider: 'bip39',
+          },
+        });
 
-        // Store session ID and token if provided
-        if (data.sessionId) localStorage.setItem('session_id', data.sessionId);
-        if (data.token) localStorage.setItem('auth_token', data.token);
 
         // Déclencher l'événement de changement d'authentification
-        window.dispatchEvent(new Event('auth_changed'));
+        broadcastAuthChange();
 
         // Rediriger vers la page d'accueil
         navigate('/');

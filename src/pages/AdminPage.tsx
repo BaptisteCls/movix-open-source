@@ -2,12 +2,16 @@ import React, { useState, useEffect } from 'react';
 import { Navigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import AdminDashboard from '../components/AdminDashboard';
+import { SquareBackground } from '../components/ui/square-background';
 
 const AdminPage: React.FC = () => {
   const { t } = useTranslation();
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [adminRole, setAdminRole] = useState<'admin' | 'uploader'>('admin');
+  const [bgMode] = useState<'combined' | 'static' | 'animated'>(() => {
+    return (localStorage.getItem('settings_bg_mode') as 'combined' | 'static' | 'animated') || 'combined';
+  });
 
   useEffect(() => {
     const checkAdminAuth = async () => {
@@ -49,12 +53,16 @@ const AdminPage: React.FC = () => {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-black text-white flex items-center justify-center">
+      <SquareBackground
+        mode={bgMode}
+        borderColor="rgba(251, 191, 36, 0.12)"
+        className="min-h-screen bg-black text-white flex items-center justify-center"
+      >
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white mx-auto mb-4"></div>
           <p>{t('admin.verifyingRights')}</p>
         </div>
-      </div>
+      </SquareBackground>
     );
   }
 
@@ -63,9 +71,13 @@ const AdminPage: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-black text-white pt-20">
+    <SquareBackground
+      mode={bgMode}
+      borderColor="rgba(251, 191, 36, 0.12)"
+      className="min-h-screen bg-black text-white pt-20"
+    >
       <AdminDashboard role={adminRole} />
-    </div>
+    </SquareBackground>
   );
 };
 

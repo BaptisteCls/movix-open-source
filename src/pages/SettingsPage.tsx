@@ -670,7 +670,6 @@ const SettingsPage: React.FC = () => {
     setIsClosingLinkModal(false);
     setLinkModal({ provider, action });
     setLinkActionError(null);
-    setBip39LinkMnemonic('');
   };
 
   const closeLinkModal = () => {
@@ -760,6 +759,8 @@ const SettingsPage: React.FC = () => {
   // Data handlers
   const openIdPopup = () => {
     const account = getResolvedAccountContext();
+    if (!account.userId) return;
+
     const currentAccountProvider = linkedAccountsMeta.accountProvider || account.accountProvider;
     const provider: 'discord' | 'google' | 'bip39' | 'oauth' | 'unknown' =
       currentAccountProvider === 'discord' || currentAccountProvider === 'google' || currentAccountProvider === 'bip39'
@@ -769,8 +770,8 @@ const SettingsPage: React.FC = () => {
           : 'unknown';
 
     setAccountIdInfo({
-      id: account.userId || t('common.notAvailable'),
-      provider: account.userId ? provider : 'unknown',
+      id: account.userId,
+      provider,
     });
     setShowIdPopup(true);
   };
@@ -967,6 +968,7 @@ const SettingsPage: React.FC = () => {
   const currentManagementProvider = linkedAccountsMeta.manageWithProvider || currentAccountProvider;
   const canManageLinkedAccounts = linkedAccountsMeta.canManageLinks;
   const currentAuthMethodLinked = currentAuthMethod ? linkedAccounts[currentAuthMethod].linked : false;
+  const canShowAccountId = Boolean(resolvedAccount.userId);
   const nonSyncableKeyCount = Math.max(0, storageMetrics.totalKeys - storageMetrics.syncableKeys);
   const nonSyncableBytes = Math.max(0, storageMetrics.totalBytes - storageMetrics.syncableBytes);
   const serverQuotaUsagePercent = serverSyncStats?.profileQuotaBytes
@@ -1995,7 +1997,7 @@ const SettingsPage: React.FC = () => {
                 )}
 
                 {/* Mon identifiant */}
-                {isAuthenticated && (
+                {isAuthenticated && canShowAccountId && (
                   <button
                     onClick={openIdPopup}
                     className="w-full flex items-center gap-4 p-4 bg-gray-800/30 rounded-xl border border-gray-700/40 hover:border-gray-600/50 hover:bg-gray-800/50 transition-all text-left group"

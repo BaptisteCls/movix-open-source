@@ -352,11 +352,15 @@ const SLOT_REEL_COUNT = 5;
 const InlineSlotMachine: React.FC<{
   pool: RouletteItem[];
   onComplete: (winners: RouletteItem[]) => void;
-}> = ({ pool, onComplete }) => {
-  const { t } = useTranslation();
+  skipAllSignal: number;
+}> = ({ pool, onComplete, skipAllSignal }) => {
   const [round, setRound] = useState(1);
   const [finishedCount, setFinishedCount] = useState(0);
   const [allCollected, setAllCollected] = useState<RouletteItem[]>([]);
+  const hideTimerRef = useRef<number | null>(null);
+  const nextTimerRef = useRef<number | null>(null);
+  const completeTimerRef = useRef<number | null>(null);
+  const completedRef = useRef(false);
 
   // Dimensions adaptatives — calcul synchrone pour éviter le décalage au premier rendu
   const computeDims = useCallback(() => {
@@ -417,6 +421,22 @@ const InlineSlotMachine: React.FC<{
   const [round1Winners, setRound1Winners] = useState<RouletteItem[]>([]);
   const [round2Winners, setRound2Winners] = useState<RouletteItem[]>([]);
   const [reelsHidden, setReelsHidden] = useState(false);
+  const allRoundWinners = roundsData.flatMap((slotRound) => slotRound.map((entry) => entry.item));
+
+  const clearPendingTimers = useCallback(() => {
+    if (hideTimerRef.current !== null) {
+      window.clearTimeout(hideTimerRef.current);
+      hideTimerRef.current = null;
+    }
+    if (nextTimerRef.current !== null) {
+      window.clearTimeout(nextTimerRef.current);
+      nextTimerRef.current = null;
+    }
+    if (completeTimerRef.current !== null) {
+      window.clearTimeout(completeTimerRef.current);
+      completeTimerRef.current = null;
+    }
+  }, []);
 
   // Quand un tour se termine : collecter les gagnants et lancer le suivant
   useEffect(() => {
@@ -425,27 +445,53 @@ const InlineSlotMachine: React.FC<{
 
     if (round === 1) {
       // Laisser les rouleaux visibles 800ms pour que l'utilisateur voie les résultats
-      const hideTimer = setTimeout(() => {
+      hideTimerRef.current = window.setTimeout(() => {
         setReelsHidden(true);
         setRound1Winners(roundWinners);
         setAllCollected(roundWinners);
       }, 800);
-      const nextTimer = setTimeout(() => {
+      nextTimerRef.current = window.setTimeout(() => {
         setRound(2);
         setFinishedCount(0);
         setReelsHidden(false);
       }, 1500);
-      return () => { clearTimeout(hideTimer); clearTimeout(nextTimer); };
+      return clearPendingTimers;
     } else {
-      const hideTimer = setTimeout(() => {
+      hideTimerRef.current = window.setTimeout(() => {
         setReelsHidden(true);
         setRound2Winners(roundWinners);
         setDone(true);
-        setTimeout(() => onComplete([...allCollected, ...roundWinners]), 400);
+        completeTimerRef.current = window.setTimeout(() => {
+          if (completedRef.current) return;
+          completedRef.current = true;
+          onComplete([...allCollected, ...roundWinners]);
+        }, 400);
       }, 800);
-      return () => clearTimeout(hideTimer);
+      return clearPendingTimers;
     }
-  }, [finishedCount]);
+  }, [allCollected, clearPendingTimers, finishedCount, onComplete, round, roundsData]);
+
+  useEffect(() => {
+    if (skipAllSignal === 0 || completedRef.current) return;
+
+    clearPendingTimers();
+    completedRef.current = true;
+    setRound(2);
+    setFinishedCount(0);
+    setAllCollected(roundsData[0].map((entry) => entry.item));
+    setRound1Winners(roundsData[0].map((entry) => entry.item));
+    setRound2Winners(roundsData[1].map((entry) => entry.item));
+    setReelsHidden(true);
+    setDone(true);
+    playWinSound();
+    onComplete(allRoundWinners);
+  }, [allRoundWinners, clearPendingTimers, onComplete, roundsData, skipAllSignal]);
+
+  useEffect(() => {
+    return () => {
+      clearPendingTimers();
+    };
+  }, [clearPendingTimers]);
 
   const isRound1Done = round1Winners.length > 0;
   const isRound2Done = round2Winners.length > 0;
@@ -583,6 +629,7 @@ const RoulettePage: React.FC = () => {
   const [allWinners, setAllWinners] = useState<RouletteItem[]>([]);
   const resultsGridRef = useRef<HTMLDivElement>(null);
   const [skipSignal, setSkipSignal] = useState(0);
+  const [slotSkipSignal, setSlotSkipSignal] = useState(0);
   const [slotMachineActive, setSlotMachineActive] = useState(false);
 
   // Watchlist
@@ -704,6 +751,7 @@ const RoulettePage: React.FC = () => {
     setWinner(null);
     setAllWinners([]);
     setSlotMachineActive(false);
+    setSlotSkipSignal(0);
     setHasSpun(true);
     usedIdsRef.current = new Set();
 
@@ -739,6 +787,11 @@ const RoulettePage: React.FC = () => {
   };
 
   const skipAll = () => {
+    if (slotMachineRunning && spinCount === 10) {
+      setSlotSkipSignal(s => s + 1);
+      return;
+    }
+
     if (!spinning && spinsLeftRef.current === 0) return;
     const items = poolRef.current;
     if (items.length === 0) return;
@@ -832,6 +885,8 @@ const RoulettePage: React.FC = () => {
       resultsGridRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }, 500);
   };
+
+  const slotMachineRunning = slotMachineActive && allWinners.length === 0;
 
   const toggleWatchlist = () => {
     if (!winner) return;
@@ -1034,12 +1089,12 @@ const RoulettePage: React.FC = () => {
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.9 }}
               onClick={spin}
-              disabled={spinning || loading}
+              disabled={spinning || loading || slotMachineRunning}
               className="relative px-10 py-4 rounded-2xl bg-gradient-to-r from-red-600 to-red-500 hover:from-red-500 hover:to-red-400 text-white font-bold text-lg shadow-lg shadow-red-500/25 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center gap-3"
             >
               {loading ? (
                 <><motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1, ease: 'linear' }}><Dices className="w-6 h-6" /></motion.div>{t('roulette.loading')}</>
-              ) : spinning ? (
+              ) : spinning || slotMachineRunning ? (
                 <><motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 0.5, ease: 'linear' }}><Dices className="w-6 h-6" /></motion.div>{t('roulette.spinning')} {spinsLeftRef.current > 0 ? `(${spinCount - spinsLeftRef.current}/${spinCount})` : ''}</>
               ) : (
                 <><Dices className="w-6 h-6" />{hasSpun ? t('roulette.spinAgain') : t('roulette.spin')}{spinCount > 1 ? ` (${spinCount}x)` : ''}</>
@@ -1054,7 +1109,7 @@ const RoulettePage: React.FC = () => {
             </motion.div>
           )}
           {slotMachineActive && pool.length > 0 && (
-            <InlineSlotMachine pool={pool} onComplete={onSlotMachineComplete} />
+            <InlineSlotMachine pool={pool} onComplete={onSlotMachineComplete} skipAllSignal={slotSkipSignal} />
           )}
 
           {/* Skip buttons */}
@@ -1082,6 +1137,22 @@ const RoulettePage: React.FC = () => {
                     {t('roulette.skipAll')}
                   </motion.button>
                 )}
+              </motion.div>
+            )}
+          </AnimatePresence>
+          <AnimatePresence>
+            {slotMachineRunning && spinCount === 10 && (
+              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex justify-center gap-3 mb-6">
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  onClick={skipAll}
+                  className="px-4 py-2 rounded-xl bg-white/5 border border-white/10 hover:bg-red-500/20 hover:border-red-500/30 text-white/50 hover:text-white text-sm transition-all flex items-center gap-2"
+                >
+                  <ChevronDown className="w-4 h-4" />
+                  <ChevronDown className="w-4 h-4 -ml-3" />
+                  {t('roulette.skipAll')}
+                </motion.button>
               </motion.div>
             )}
           </AnimatePresence>
