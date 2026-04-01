@@ -221,3 +221,9 @@ Pour un premier lancement local, configure au minimum :
 ## Licence
 
 Ce projet est distribué sous licence Creative Commons Attribution-NonCommercial 4.0 International (CC BY-NC 4.0). Le texte complet est disponible dans [LICENSE](LICENSE).
+
+## Avertissement
+
+Ce projet est fourni uniquement à des fins éducatives, de recherche et de démonstration.
+Il n'encourage ni ne cautionne une utilisation illégale, le contournement de droits, ou toute violation des lois applicables.
+Chaque utilisateur est seul responsable de l'usage qu'il en fait.
