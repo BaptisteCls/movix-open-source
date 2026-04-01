@@ -1,81 +1,67 @@
-<div align="center">
+# Extension navigateur Movix
 
-<img src="../public/movix.png" alt="Extension Movix" width="120" />
+L'extension Movix sert quand le site a besoin d'un coup de main côté navigateur : réécriture de headers, interception de requêtes, extraction locale de certaines sources et pont entre la page Movix et une logique qui ne peut pas vivre uniquement dans le frontend web.
 
-# Extension Movix
+Le repo garde deux variantes en parallèle :
 
-**Extension navigateur utilisée par Movix pour l'extraction locale des flux vidéo.**
+- `extension/Chrome/`
+- `extension/Firefox/`
 
-[![Firefox Add-ons](https://img.shields.io/badge/Firefox-Add--ons-FF7139?style=flat&logo=firefoxbrowser&logoColor=white)](https://addons.mozilla.org/en-US/firefox/addon/movix-proxy-extension/)
-[![Userscript](https://img.shields.io/badge/Alternative-Userscript-blue?style=flat)](../userscript/README.md)
+## Quand choisir l'extension
 
-</div>
+| Cas | Recommandation |
+| --- | --- |
+| Firefox | Extension native recommandée |
+| Chrome / Edge / Brave | L'extension fonctionne, mais le userscript peut être plus simple à installer |
+| Dev local | Charge directement les dossiers `Chrome/` ou `Firefox/` |
 
----
+Si tu préfères Tampermonkey sur Chromium, regarde aussi [userscript/README.md](../userscript/README.md).
 
-L'extension Movix permet d'exécuter certaines extractions directement dans le navigateur, d'injecter les headers nécessaires selon les hosters, et de contourner certains blocages CORS ou de contexte appareil/domaine.
+## Installation locale
 
-## Liens utiles
-
-- [README Movix OS](../README_MOVIX_OS.md)
-- [README Userscript Movix](../userscript/README.md)
-- [Firefox Add-ons](https://addons.mozilla.org/en-US/firefox/addon/movix-proxy-extension/)
-- [Archive Firefox](Firefox/Firefox.zip)
-- [Archive Chrome](Chrome/Chrome.zip)
-
-## Quelle option choisir ?
-
-- **Firefox** : l'extension native est l'option recommandée.
-- **Chrome / Edge / Brave** : le [userscript Tampermonkey](../userscript/README.md) est souvent le plus simple à installer.
-- **Développement local** : tu peux charger directement les dossiers `Chrome/` ou `Firefox/`.
-
-## Installation
-
-### Firefox
-
-1. Ouvre la page [Firefox Add-ons](https://addons.mozilla.org/en-US/firefox/addon/movix-proxy-extension/).
-2. Clique sur **Ajouter à Firefox**.
-3. Accepte les permissions demandées.
-4. Recharge Movix.
-
-### Installation locale sur Chrome / Brave / Edge
+### Chrome / Edge / Brave
 
 1. Ouvre `chrome://extensions`.
 2. Active le mode développeur.
-3. Clique sur **Charger l'extension non empaquetée**.
-4. Sélectionne le dossier [`extension/Chrome`](Chrome/).
+3. Clique sur `Charger l'extension non empaquetée`.
+4. Sélectionne `extension/Chrome/`.
 
-### Installation locale sur Firefox
+### Firefox
 
 1. Ouvre `about:debugging#/runtime/this-firefox`.
-2. Clique sur **Charger un module complémentaire temporaire**.
-3. Sélectionne [`extension/Firefox/manifest.json`](Firefox/manifest.json).
-
-Tu peux aussi consulter l'archive [`Firefox.zip`](Firefox/Firefox.zip).
+2. Clique sur `Charger un module complémentaire temporaire`.
+3. Sélectionne `extension/Firefox/manifest.json`.
 
 ## Structure
 
-- [`Chrome/`](Chrome/) : version Chrome / Chromium de l'extension
-- [`Firefox/`](Firefox/) : version Firefox de l'extension
+Chaque variante contient les mêmes briques principales :
 
-## Permissions
+- `manifest.json`
+- `background.js`
+- `content.js`
+- `injected.js`
+- `extractors.js`
+- `popup.html`
+- `popup.js`
 
-L'extension utilise principalement :
+## Permissions et comportement
+
+Les manifests déclarent notamment :
 
 - `declarativeNetRequest`
 - `declarativeNetRequestWithHostAccess`
 - `storage`
-- des `host_permissions` larges pour intercepter et adapter certaines requêtes vidéo
+- des `host_permissions` larges
 
-Ces permissions sont nécessaires pour :
+Ces permissions servent à :
 
-- injecter les bons headers
-- traiter des flux protégés par CORS
-- exécuter l'extraction locale dans le navigateur
+- injecter ou normaliser les bons headers
+- faire passer certaines requêtes vidéo ou Live TV
+- exécuter des extractions dans le contexte adapté
+- permettre la communication avec Movix sur ses domaines autorisés
 
-## Alternative userscript
+## Notes de contribution
 
-Si tu ne veux pas installer l'extension native, ou si tu préfères Tampermonkey sur un navigateur Chromium, utilise le userscript Movix :
-
-- [README Userscript Movix](../userscript/README.md)
-- [Installation directe de `movix.user.js`](https://github.com/MysticSaba-max/movix-open-source/raw/refs/heads/main/userscript/movix.user.js)
+- Si tu modifies la logique partagée, compare toujours `Chrome/` et `Firefox/`.
+- Les deux variantes n'ont pas exactement le même manifest ; ne pars pas du principe qu'un copier-coller suffit.
+- Si la feature doit aussi exister en mode Tampermonkey, vérifie `userscript/movix.user.js`.

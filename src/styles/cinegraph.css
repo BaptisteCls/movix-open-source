@@ -1,0 +1,998 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   CinéGraph – Interactive network visualization styles
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.cinegraph-page {
+  min-height: 100vh;
+  background: #000;
+  position: relative;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+/* ─── Ambient background glow ────────────────────────────────────────────── */
+
+.cinegraph-page::before {
+  content: '';
+  position: fixed;
+  top: -30%;
+  left: -30%;
+  width: 160%;
+  height: 160%;
+  background:
+    radial-gradient(ellipse at 20% 50%, rgba(229, 9, 20, 0.08) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 20%, rgba(59, 130, 246, 0.06) 0%, transparent 50%),
+    radial-gradient(ellipse at 50% 80%, rgba(139, 92, 246, 0.05) 0%, transparent 50%);
+  pointer-events: none;
+  z-index: 0;
+  animation: cinegraph-ambient 20s ease-in-out infinite alternate;
+}
+
+@keyframes cinegraph-ambient {
+  0% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(-3%, 2%) scale(1.05); }
+  100% { transform: translate(2%, -2%) scale(1); }
+}
+
+/* ─── Header area ────────────────────────────────────────────────────────── */
+
+.cinegraph-header {
+  position: relative;
+  z-index: 500;
+  padding: 16px 24px 0;
+}
+
+.cinegraph-title-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.cinegraph-title {
+  font-size: 2.4rem;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  background: linear-gradient(135deg, #fff 0%, #e50914 50%, #ff6b6b 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  text-align: center;
+  animation: cinegraph-title-shimmer 4s ease-in-out infinite;
+  background-size: 200% 200%;
+}
+
+@keyframes cinegraph-title-shimmer {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}
+
+.cinegraph-subtitle {
+  text-align: center;
+  color: #9ca3af;
+  font-size: 0.8rem;
+  margin-bottom: 14px;
+}
+
+/* ─── Search container ───────────────────────────────────────────────────── */
+
+.cinegraph-search-container {
+  position: relative;
+  z-index: 600;
+  max-width: 600px;
+  margin: 0 auto 20px;
+}
+
+.cinegraph-search-wrapper {
+  position: relative;
+}
+
+.cinegraph-search-input {
+  width: 100%;
+  padding: 14px 48px 14px 48px;
+  background: rgba(17, 17, 17, 0.8);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 16px;
+  color: #fff;
+  font-size: 1rem;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  outline: none;
+}
+
+.cinegraph-search-input:focus {
+  border-color: rgba(229, 9, 20, 0.6);
+  box-shadow:
+    0 0 0 3px rgba(229, 9, 20, 0.15),
+    0 0 40px rgba(229, 9, 20, 0.1);
+}
+
+.cinegraph-search-input::placeholder {
+  color: #6b7280;
+}
+
+.cinegraph-search-icon {
+  position: absolute;
+  left: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #6b7280;
+  pointer-events: none;
+}
+
+.cinegraph-search-clear {
+  position: absolute;
+  right: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #6b7280;
+  cursor: pointer;
+  background: none;
+  border: none;
+  padding: 4px;
+  border-radius: 50%;
+  transition: all 0.2s;
+}
+
+.cinegraph-search-clear:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* ─── Search results dropdown ────────────────────────────────────────────── */
+
+.cinegraph-search-results {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  background: rgba(17, 17, 17, 0.95);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 16px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  max-height: 420px;
+  z-index: 700;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+.cinegraph-search-results::-webkit-scrollbar {
+  width: 6px;
+}
+
+.cinegraph-search-results::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.cinegraph-search-results::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 3px;
+}
+
+.cinegraph-search-result-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  cursor: pointer;
+  transition: all 0.2s;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.cinegraph-search-result-item:last-child {
+  border-bottom: none;
+}
+
+.cinegraph-search-result-item:hover {
+  background: rgba(229, 9, 20, 0.12);
+}
+
+.cinegraph-search-result-poster {
+  width: 40px;
+  height: 60px;
+  border-radius: 6px;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.cinegraph-search-result-poster-placeholder {
+  width: 40px;
+  height: 60px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: #4b5563;
+}
+
+.cinegraph-search-result-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.cinegraph-search-result-title {
+  color: #fff;
+  font-weight: 600;
+  font-size: 0.9rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cinegraph-search-result-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #9ca3af;
+  font-size: 0.78rem;
+  margin-top: 2px;
+}
+
+.cinegraph-type-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.cinegraph-type-badge.movie {
+  background: rgba(229, 9, 20, 0.2);
+  color: #f87171;
+}
+
+.cinegraph-type-badge.tv {
+  background: rgba(59, 130, 246, 0.2);
+  color: #60a5fa;
+}
+
+/* ─── Legend / filter chips ───────────────────────────────────────────────── */
+
+.cinegraph-legend {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 16px;
+  position: relative;
+  z-index: 10;
+  padding: 0 24px;
+}
+
+.cinegraph-legend-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  color: #d1d5db;
+  user-select: none;
+}
+
+.cinegraph-legend-chip:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.cinegraph-legend-chip.active {
+  border-color: var(--chip-color, #fff);
+  background: color-mix(in srgb, var(--chip-color, #fff) 15%, transparent);
+  color: #fff;
+}
+
+.cinegraph-legend-chip.inactive {
+  opacity: 0.35;
+}
+
+.cinegraph-legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* ─── Graph container ────────────────────────────────────────────────────── */
+
+.cinegraph-graph-container {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  flex: 1;
+  border-radius: 16px;
+  overflow: hidden;
+  margin: 0 auto;
+}
+
+.cinegraph-graph-container canvas {
+  border-radius: 16px;
+}
+
+/* ─── Node tooltip / detail panel ────────────────────────────────────────── */
+
+.cinegraph-tooltip {
+  position: fixed;
+  z-index: 12500;
+  pointer-events: none;
+  max-width: 320px;
+  background: rgba(12, 12, 12, 0.95);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  padding: 12px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+  animation: cinegraph-tooltip-in 0.2s ease-out;
+}
+
+@keyframes cinegraph-tooltip-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95) translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.cinegraph-tooltip-header {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.cinegraph-tooltip-poster {
+  width: 50px;
+  height: 75px;
+  border-radius: 6px;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.cinegraph-tooltip-poster-placeholder {
+  width: 50px;
+  height: 75px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: #4b5563;
+}
+
+.cinegraph-tooltip-title {
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.95rem;
+  line-height: 1.3;
+}
+
+.cinegraph-tooltip-meta {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 4px;
+  font-size: 0.78rem;
+  color: #9ca3af;
+}
+
+.cinegraph-tooltip-rating {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  color: #fbbf24;
+}
+
+.cinegraph-tooltip-overview {
+  color: #9ca3af;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.cinegraph-tooltip-action {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 0.72rem;
+  color: #6b7280;
+  text-align: center;
+}
+
+/* ─── Detail modal / side panel ──────────────────────────────────────────── */
+
+.cinegraph-detail-panel {
+  position: fixed;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 400px;
+  max-width: 90vw;
+  background: rgba(12, 12, 12, 0.97);
+  backdrop-filter: blur(30px);
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  z-index: 12000;
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  padding: 0;
+  box-shadow: -20px 0 60px rgba(0, 0, 0, 0.5);
+}
+
+.cinegraph-detail-panel::-webkit-scrollbar {
+  width: 5px;
+}
+
+.cinegraph-detail-panel::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+}
+
+.cinegraph-detail-backdrop {
+  position: relative;
+  width: 100%;
+  height: 220px;
+  overflow: hidden;
+}
+
+.cinegraph-detail-backdrop img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.cinegraph-detail-backdrop::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 70%;
+  background: linear-gradient(to top, rgba(12, 12, 12, 1), transparent);
+}
+
+.cinegraph-detail-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 10;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 50%;
+  color: #fff;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.cinegraph-detail-close:hover {
+  background: rgba(229, 9, 20, 0.5);
+  transform: scale(1.1);
+}
+
+.cinegraph-detail-content {
+  padding: 0 24px 24px;
+  margin-top: -60px;
+  position: relative;
+  z-index: 5;
+}
+
+.cinegraph-detail-title {
+  font-size: 1.5rem;
+  font-weight: 800;
+  color: #fff;
+  margin-bottom: 8px;
+}
+
+.cinegraph-detail-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.cinegraph-detail-overview {
+  color: #9ca3af;
+  font-size: 0.9rem;
+  line-height: 1.7;
+  margin-bottom: 20px;
+}
+
+.cinegraph-detail-links {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.cinegraph-detail-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 18px;
+  border-radius: 10px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  transition: all 0.3s;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.cinegraph-detail-link.primary {
+  background: linear-gradient(135deg, #e50914, #b91c1c);
+  color: #fff;
+}
+
+.cinegraph-detail-link.primary:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px rgba(229, 9, 20, 0.35);
+}
+
+.cinegraph-detail-link.secondary {
+  background: rgba(255, 255, 255, 0.08);
+  color: #d1d5db;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.cinegraph-detail-link.secondary:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+
+.cinegraph-detail-connections {
+  margin-top: 24px;
+}
+
+.cinegraph-detail-connections h3 {
+  color: #fff;
+  font-size: 1rem;
+  font-weight: 700;
+  margin-bottom: 12px;
+}
+
+.cinegraph-connection-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+  margin-bottom: 4px;
+}
+
+.cinegraph-connection-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.cinegraph-connection-label {
+  color: #fff;
+  font-size: 0.85rem;
+  font-weight: 500;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cinegraph-connection-type {
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  opacity: 0.7;
+}
+
+/* ─── Trending / start grid ──────────────────────────────────────────────── */
+
+.cinegraph-start-grid {
+  position: relative;
+  z-index: 10;
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 0 24px 40px;
+}
+
+.cinegraph-start-grid h2 {
+  color: #fff;
+  font-size: 0.95rem;
+  font-weight: 700;
+  margin-bottom: 20px;
+  text-align: center;
+}
+
+.cinegraph-start-items {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 16px;
+}
+
+.cinegraph-start-item {
+  cursor: pointer;
+  border-radius: 12px;
+  overflow: hidden;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.cinegraph-start-item:hover {
+  transform: translateY(-4px) scale(1.02);
+  border-color: rgba(229, 9, 20, 0.4);
+  box-shadow: 0 12px 30px rgba(229, 9, 20, 0.15);
+}
+
+.cinegraph-start-item img {
+  width: 100%;
+  aspect-ratio: 2/3;
+  object-fit: cover;
+  display: block;
+}
+
+.cinegraph-start-item-info {
+  padding: 6px 8px;
+}
+
+.cinegraph-start-item-title {
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cinegraph-start-item-meta {
+  color: #6b7280;
+  font-size: 0.62rem;
+  margin-top: 2px;
+}
+
+/* ─── Loading states ─────────────────────────────────────────────────────── */
+
+.cinegraph-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 60vh;
+  gap: 20px;
+}
+
+.cinegraph-loading-orb {
+  width: 80px;
+  height: 80px;
+  position: relative;
+}
+
+.cinegraph-loading-orb::before,
+.cinegraph-loading-orb::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 3px solid transparent;
+}
+
+.cinegraph-loading-orb::before {
+  border-top-color: #e50914;
+  border-right-color: #e50914;
+  animation: cinegraph-spin 1s linear infinite;
+}
+
+.cinegraph-loading-orb::after {
+  border-bottom-color: #3b82f6;
+  border-left-color: #8b5cf6;
+  animation: cinegraph-spin 1.5s linear infinite reverse;
+  inset: 8px;
+}
+
+@keyframes cinegraph-spin {
+  to { transform: rotate(360deg); }
+}
+
+.cinegraph-loading-text {
+  color: #9ca3af;
+  font-size: 0.95rem;
+  animation: cinegraph-pulse 2s ease-in-out infinite;
+}
+
+@keyframes cinegraph-pulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
+
+/* ─── Controls bar ───────────────────────────────────────────────────────── */
+
+.cinegraph-controls {
+  position: absolute;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 8px;
+  z-index: 50;
+  background: rgba(12, 12, 12, 0.8);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  padding: 8px;
+}
+
+.cinegraph-control-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 10px;
+  border: none;
+  background: rgba(255, 255, 255, 0.06);
+  color: #d1d5db;
+  font-size: 0.78rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.cinegraph-control-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+
+.cinegraph-control-btn.active {
+  background: rgba(229, 9, 20, 0.25);
+  color: #f87171;
+  border: 1px solid rgba(229, 9, 20, 0.3);
+}
+
+/* ─── Stats bar ──────────────────────────────────────────────────────────── */
+
+.cinegraph-stats {
+  display: flex;
+  justify-content: center;
+  gap: 20px;
+  padding: 4px 24px;
+  position: relative;
+  z-index: 10;
+}
+
+.cinegraph-stat {
+  text-align: center;
+}
+
+.cinegraph-stat-value {
+  font-size: 1rem;
+  font-weight: 800;
+  color: #fff;
+}
+
+.cinegraph-stat-label {
+  font-size: 0.6rem;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* ─── Responsive ─────────────────────────────────────────────────────────── */
+
+@media (max-width: 768px) {
+  .cinegraph-title {
+    font-size: 1.3rem;
+  }
+
+  .cinegraph-subtitle {
+    font-size: 0.75rem;
+  }
+
+  .cinegraph-detail-panel {
+    width: 100%;
+  }
+
+  .cinegraph-controls {
+    bottom: 12px;
+    padding: 6px;
+    gap: 4px;
+  }
+
+  .cinegraph-control-btn {
+    padding: 6px 10px;
+    font-size: 0.72rem;
+  }
+
+  .cinegraph-stats {
+    gap: 16px;
+  }
+
+  .cinegraph-start-items {
+    grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+    gap: 12px;
+  }
+
+  .cinegraph-legend {
+    gap: 6px;
+  }
+
+  .cinegraph-legend-chip {
+    padding: 4px 10px;
+    font-size: 0.72rem;
+  }
+}
+
+/* ─── Help Button ────────────────────────────────────────────────────────── */
+
+.cinegraph-help-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.06);
+  color: #9ca3af;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  flex-shrink: 0;
+}
+
+.cinegraph-help-btn:hover {
+  color: #fff;
+  background: rgba(229, 9, 20, 0.15);
+  border-color: rgba(229, 9, 20, 0.4);
+  transform: scale(1.1);
+}
+
+/* ─── Help Modal ─────────────────────────────────────────────────────────── */
+
+.cinegraph-help-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 13000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  padding: 24px;
+}
+
+.cinegraph-help-modal {
+  position: relative;
+  width: 100%;
+  max-width: 520px;
+  max-height: 85vh;
+  overflow-y: auto;
+  background: linear-gradient(165deg, rgba(28, 28, 36, 0.97) 0%, rgba(14, 14, 18, 0.98) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 20px;
+  padding: 36px 32px 32px;
+  box-shadow:
+    0 0 60px rgba(229, 9, 20, 0.1),
+    0 25px 50px rgba(0, 0, 0, 0.5);
+}
+
+.cinegraph-help-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 50%;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #9ca3af;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.cinegraph-help-close:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.cinegraph-help-icon-header {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 12px;
+  color: #e50914;
+  filter: drop-shadow(0 0 20px rgba(229, 9, 20, 0.4));
+}
+
+.cinegraph-help-modal h2 {
+  text-align: center;
+  font-size: 1.5rem;
+  font-weight: 800;
+  color: #fff;
+  margin: 0 0 8px;
+  letter-spacing: -0.02em;
+}
+
+.cinegraph-help-intro {
+  text-align: center;
+  color: #9ca3af;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  margin: 0 0 24px;
+}
+
+.cinegraph-help-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.cinegraph-help-item {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+  padding: 14px 16px;
+  transition: background 0.2s ease;
+}
+
+.cinegraph-help-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.cinegraph-help-step {
+  font-size: 1.4rem;
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cinegraph-help-item strong {
+  display: block;
+  color: #fff;
+  font-size: 0.9rem;
+  font-weight: 700;
+  margin-bottom: 3px;
+}
+
+.cinegraph-help-item p {
+  color: #9ca3af;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.cinegraph-help-item b {
+  color: #d1d5db;
+}

@@ -1,0 +1,53 @@
+const APRIL_FOOLS_TIMEZONE = 'Europe/Paris';
+const APRIL_FOOLS_PREVIEW_QUERY = 'apriladmin';
+const APRIL_FOOLS_PREVIEW_STORAGE_KEY = 'movix_april_admin_preview';
+
+const aprilFoolsFormatter = new Intl.DateTimeFormat('en-GB', {
+  timeZone: APRIL_FOOLS_TIMEZONE,
+  day: '2-digit',
+  month: '2-digit',
+});
+
+export const APRIL_FOOLS_ADMIN_PATH = '/admin-control-center';
+
+const getMonthDay = (date: Date) => {
+  const parts = aprilFoolsFormatter.formatToParts(date);
+  const day = parts.find((part) => part.type === 'day')?.value ?? '';
+  const month = parts.find((part) => part.type === 'month')?.value ?? '';
+
+  return { day, month };
+};
+
+export const isAprilFoolsDay = (date = new Date()) => {
+  const { day, month } = getMonthDay(date);
+  return day === '01' && month === '04';
+};
+
+const readPreviewFlag = (search: string) => {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+
+  const params = new URLSearchParams(search);
+  const previewValue = params.get(APRIL_FOOLS_PREVIEW_QUERY);
+
+  if (previewValue === '1') {
+    sessionStorage.setItem(APRIL_FOOLS_PREVIEW_STORAGE_KEY, 'true');
+    return true;
+  }
+
+  if (previewValue === '0') {
+    sessionStorage.removeItem(APRIL_FOOLS_PREVIEW_STORAGE_KEY);
+    return false;
+  }
+
+  return sessionStorage.getItem(APRIL_FOOLS_PREVIEW_STORAGE_KEY) === 'true';
+};
+
+export const isAprilFoolsAdminEnabled = (search = '') => {
+  if (isAprilFoolsDay()) {
+    return true;
+  }
+
+  return readPreviewFlag(search);
+};

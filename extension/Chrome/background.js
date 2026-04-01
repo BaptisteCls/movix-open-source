@@ -82,7 +82,6 @@ async function setupRules() {
         initiatorDomains: [
           "localhost",
           "127.0.0.1",
-          "movix.blog",
           "movix.rodeo",
           "movix.club",
         ],
@@ -348,8 +347,8 @@ function handleDetectEmbeds(payload) {
 function buildBackendApiHeaders(accessKey, extraHeaders = {}) {
   const headers = {
     Accept: "application/json",
-    Origin: "https://movix.blog",
-    Referer: "https://movix.blog/",
+    Origin: "https://movix.rodeo",
+    Referer: "https://movix.rodeo/",
     ...extraHeaders,
   };
 

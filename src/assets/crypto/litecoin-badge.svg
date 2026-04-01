@@ -1,0 +1,20 @@
+<svg width="96" height="96" viewBox="0 0 96 96" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="litecoin-bg" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(33 26) rotate(51.05) scale(68.2855)">
+      <stop stop-color="#F5F8FF"/>
+      <stop offset="0.52" stop-color="#8CB8FF"/>
+      <stop offset="1" stop-color="#283247"/>
+    </radialGradient>
+    <linearGradient id="litecoin-ring" x1="19" y1="18" x2="77" y2="80" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF" stop-opacity="0.95"/>
+      <stop offset="1" stop-color="#D7E6FF" stop-opacity="0.22"/>
+    </linearGradient>
+  </defs>
+  <circle cx="48" cy="48" r="38" fill="#070707"/>
+  <circle cx="48" cy="48" r="34" fill="url(#litecoin-bg)"/>
+  <circle cx="48" cy="48" r="33.25" stroke="url(#litecoin-ring)" stroke-width="1.5"/>
+  <circle cx="39" cy="30" r="14" fill="#FFFFFF" opacity="0.12"/>
+  <path d="M56.5 25L47.5 57H58L55 69H29L31.2 59.5H40.5L47.5 31H56.5Z" fill="#F9FBFF"/>
+  <path d="M39.5 46.5L64 39.5L62 47.8L37.6 54.7L39.5 46.5Z" fill="#F9FBFF"/>
+  <path d="M34.5 74.5C40.7027 78.5664 48.0631 80.398 55.5 79.5" stroke="#F9FBFF" stroke-opacity="0.18" stroke-width="2" stroke-linecap="round"/>
+</svg>

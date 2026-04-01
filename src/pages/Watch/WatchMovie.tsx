@@ -1,0 +1,3904 @@
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
+import axios from 'axios';
+import HLSPlayer from '../../components/HLSPlayer';
+import { motion, AnimatePresence } from 'framer-motion';
+import { useAdFreePopup } from '../../context/AdFreePopupContext';
+import AdFreePlayerAds from '../../components/AdFreePlayerAds';
+import { extractM3u8FromEmbed, extractVoeM3u8, extractUqloadFile, extractVidzyM3u8, extractFsvidM3u8, extractOneUploadSources, isOneUploadEmbed, isVoeEmbed, extractDoodStreamFile, extractSeekStreamingM3u8, isDoodStreamEmbed, isSeekStreamingEmbed, DOODSTREAM_EXTRACTIONS_ENABLED, SEEKSTREAMING_EXTRACTIONS_ENABLED, type M3u8Result } from '../../utils/extractM3u8';
+import { getTmdbId } from '../../utils/idEncoder';
+import { generateRivestreamSecretKey } from '../../utils/rivestreamSecretKey';
+import { useWrappedTracker } from '../../hooks/useWrappedTracker';
+import { isUserVip, getVipHeaders } from '../../utils/authUtils';
+import { RIVESTREAM_PROXIES } from '../../config/rivestreamProxy';
+import { buildProxyUrl } from '../../config/runtime';
+import { getTmdbLanguage } from '../../i18n';
+import { useProfile } from '../../context/ProfileContext';
+import { isContentAllowed, getClassificationLabel } from '../../utils/certificationUtils';
+import { getCoflixPreferredUrl } from '../../utils/coflix';
+
+
+const MAIN_API = import.meta.env.VITE_MAIN_API;
+const TMDB_API_KEY = import.meta.env.VITE_TMDB_API_KEY || '';
+
+// Constante pour contrôler la vérification VIP pour Rivestream
+const ENABLE_RIVESTREAM_VIP_CHECK = false;
+
+// Helper function to check if Rivestream is available (VIP check if enabled)
+const isRivestreamAvailable = (): boolean => {
+  if (!ENABLE_RIVESTREAM_VIP_CHECK) {
+    return true; // Si la vérification VIP est désactivée, Rivestream est toujours disponible
+  }
+  return isUserVip();
+};
+
+// Helper function to generate proxy URL for fsvid sources
+const getProxyUrl = (url: string): string => {
+  if (url.toLowerCase().includes('fsvid')) {
+    return buildProxyUrl(url);
+  }
+  return url;
+};
+
+const normalizeUqloadEmbedUrl = (url: string): string => {
+  return url
+    .replace(/uqload\.bz/gi, 'uqload.is')
+    .replace(/uqload%2ebz/gi, 'uqload%2eis');
+};
+
+interface NextMovieType {
+  id: number;
+  title: string;
+  overview: string;
+  release_date: string;
+  vote_average: number;
+  poster_path: string;
+  runtime: number;
+}
+
+interface OmegaMovieResponse {
+  player_links: Array<{
+    player: string;
+    link: string;
+    is_hd: boolean;
+    label?: string;
+  }>;
+  version: string;
+}
+
+interface CoflixResponse {
+  tmdb_details: {
+    id: number;
+    title: string;
+    original_title: string;
+    release_date: string;
+    poster_path: string;
+    backdrop_path: string;
+    overview: string;
+    vote_average: number;
+  };
+  iframe_src: string;
+  player_links: Array<{
+    decoded_url: string;
+    clone_url?: string;
+    quality: string;
+    language: string;
+  }>;
+}
+
+interface FStreamResponse {
+  success: boolean;
+  source: string;
+  type: string;
+  tmdb: {
+    id: number;
+    title: string;
+    original_title: string;
+    release_date: string;
+    overview: string;
+  };
+  search: {
+    query: string;
+    results: number;
+    bestMatch: any;
+  };
+  players: {
+    VFQ?: Array<{
+      url: string;
+      type: string;
+      quality: string;
+      player: string;
+    }>;
+    VFF?: Array<{
+      url: string;
+      type: string;
+      quality: string;
+      player: string;
+    }>;
+    VOSTFR?: Array<{
+      url: string;
+      type: string;
+      quality: string;
+      player: string;
+    }>;
+    Default?: Array<{
+      url: string;
+      type: string;
+      quality: string;
+      player: string;
+    }>;
+  };
+  total: number;
+  metadata: {
+    extractedAt: string;
+  };
+}
+
+
+
+// Interface pour la source Wiflix (Lynx)
+interface WiflixMovieResponse {
+  success: boolean;
+  tmdb_id: string;
+  title: string;
+  original_title: string;
+  wiflix_url: string;
+  players: {
+    vf: Array<{
+      name: string;
+      url: string;
+      episode: number;
+      type: string;
+    }>;
+    vostfr: Array<{
+      name: string;
+      url: string;
+      episode: number;
+      type: string;
+    }>;
+  };
+  cache_timestamp: string;
+}
+
+// Interface pour la source Viper (Cpasmal)
+interface ViperMovieResponse {
+  title: string;
+  year: string;
+  cpasmalUrl: string;
+  links: {
+    vf: Array<{ server: string; url: string }>;
+    vostfr: Array<{ server: string; url: string }>;
+  };
+}
+
+interface DarkinoResult {
+  available: boolean;
+  sources: NightflixSource[];
+  darkinoId: string;
+}
+
+interface NightflixSource {
+  src: string;
+  m3u8: string;
+  quality?: string;
+  language?: string;
+  sub?: string;
+  label?: string;
+}
+
+type PlayerSourceType = 'primary' | 'vostfr' | 'videasy' | 'vidsrccc' | 'vidsrcsu' | 'vidsrcwtf1' | 'vidsrcwtf5' | 'multi' | 'omega' | 'darkino' | 'mp4' | 'coflix' | 'frembed' | 'custom' | 'nexus_hls' | 'nexus_file' | 'fstream' | 'wiflix' | 'viper' | 'vidmoly' | 'dropload' | 'adfree' | 'rivestream_hls' | number;
+
+function formatPremidSourceDetail(...parts: Array<string | null | undefined>) {
+  const normalizedParts = parts
+    .map(part => (typeof part === 'string' ? part.trim() : ''))
+    .filter(Boolean)
+    .filter((part, index, array) =>
+      array.findIndex(entry => entry.toLowerCase() === part.toLowerCase()) === index
+    );
+
+  return normalizedParts.length > 0 ? normalizedParts.join(' - ') : undefined;
+}
+
+// Helper functions - Check custom links from MySQL API
+const checkMovieAvailability = async (movieId: string) => {
+  try {
+    const customLinks: string[] = [];
+    const mp4Links: { url: string; label?: string; language?: string; isVip?: boolean }[] = [];
+
+    // Fetch custom links from MySQL API
+    try {
+      const response = await axios.get(`${MAIN_API}/api/links/movie/${movieId}`);
+
+      if (response.data && response.data.success && response.data.data && response.data.data.links) {
+        const rawLinks = response.data.data.links;
+        console.log('Raw API links:', rawLinks);
+
+        const uniqueUrls = new Set<string>();
+
+        rawLinks.forEach((item: any) => {
+          if (typeof item === 'string') {
+            if (item.toLowerCase().endsWith('.mp4') && !uniqueUrls.has(item)) {
+              uniqueUrls.add(item);
+              mp4Links.push({
+                url: item,
+                label: "Viblix",
+                language: 'Français',
+                isVip: false
+              });
+            } else {
+              customLinks.push(item);
+            }
+          } else if (typeof item === 'object' && item !== null && typeof item.url === 'string') {
+            if (item.url.toLowerCase().endsWith('.mp4') && !uniqueUrls.has(item.url)) {
+              uniqueUrls.add(item.url);
+              mp4Links.push({
+                url: item.url,
+                label: item.label || "Viblix",
+                language: item.language || 'Français',
+                isVip: item.isVip || false
+              });
+            } else {
+              customLinks.push(item.url);
+            }
+          }
+        });
+
+        console.log('Processed API links - customLinks:', customLinks, 'mp4Links:', mp4Links);
+      }
+    } catch (apiError) {
+      console.error('Error fetching custom links from API:', apiError);
+    }
+
+    // Check Frembed availability
+    try {
+      const frembedResponse = await axios.get(`https://frembed.bond/api/public/v1/movies/${movieId}`, { timeout: 1000 });
+      console.log(`Checking Frembed for ID ${movieId}:`, frembedResponse.data);
+      const isFrembedAvailable = frembedResponse.data.status === 200 && frembedResponse.data.result?.totalItems > 0;
+
+      return {
+        isAvailable: true,
+        customLinks: customLinks || [],
+        frembedAvailable: isFrembedAvailable,
+        mp4Links: mp4Links || []
+      };
+    } catch (frembedError) {
+      console.error('Error checking Frembed availability:', frembedError);
+      return {
+        isAvailable: true,
+        customLinks: customLinks || [],
+        frembedAvailable: false,
+        mp4Links: mp4Links || []
+      };
+    }
+  } catch (error) {
+    console.error('Error checking availability:', error);
+    return {
+      isAvailable: true,
+      customLinks: [],
+      frembedAvailable: false,
+      mp4Links: []
+    };
+  }
+};
+
+const checkDarkinoAvailability = async (
+  movieTitle: string,
+  _releaseDate: string,
+  movieId: string,
+  updateRetryMessage?: (message: string) => void,
+  retryCount = 0
+): Promise<DarkinoResult | false> => {
+  const retryMessages = [
+    'Finalisation de la recherche...',
+    'Preparation de la source Nightflix...',
+    'Verification des acces...',
+    'Optimisation de la connexion...'
+  ];
+  const normalizeTitle = (value?: string | null) =>
+    (value || '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim();
+
+  try {
+    // Special case for TMDB ID 11 (La Guerre des étoiles) - directly use Darkino ID 96071
+    if (movieId === '11') {
+      const downloadResponse = await axios.get(`${MAIN_API}/api/films/download/96071`);
+      const sources: NightflixSource[] = Array.isArray(downloadResponse.data?.sources)
+        ? downloadResponse.data.sources.filter((source: NightflixSource) => typeof source?.m3u8 === 'string' && source.m3u8.trim() !== '')
+        : [];
+      return sources.length > 0
+        ? { available: true, sources, darkinoId: '96071' }
+        : false;
+    }
+
+    const tmdbResponse = await axios.get(`https://api.themoviedb.org/3/movie/${movieId}`, {
+      params: { api_key: TMDB_API_KEY, language: getTmdbLanguage() }
+    });
+    const tmdbTitle = tmdbResponse.data?.title || movieTitle;
+    const tmdbOriginalTitle = tmdbResponse.data?.original_title || '';
+    const targetYear = Number.parseInt(String((tmdbResponse.data?.release_date || _releaseDate || '')).slice(0, 4), 10);
+    const searchQueries = [...new Set([movieTitle, tmdbTitle, tmdbOriginalTitle].filter(Boolean))];
+
+    for (const query of searchQueries) {
+      const searchResponse = await axios.get(`${MAIN_API}/api/search`, {
+        params: { title: query }
+      });
+      const results = Array.isArray(searchResponse.data?.results) ? searchResponse.data.results : [];
+      if (results.length === 0) {
+        continue;
+      }
+
+      let matchingMovie = results.find((result: any) =>
+        (result.have_streaming === 1 || result.have_streaming === 0) &&
+        result.type !== 'series' &&
+        result.tmdb_id &&
+        String(result.tmdb_id) === String(movieId)
+      );
+
+      if (!matchingMovie) {
+        const normalizedTmdbTitle = normalizeTitle(tmdbTitle);
+        const normalizedOriginalTitle = normalizeTitle(tmdbOriginalTitle);
+        matchingMovie = results.find((result: any) => {
+          if (!(result.have_streaming === 1 || result.have_streaming === 0) || result.type === 'series') {
+            return false;
+          }
+
+          const resultTitle = normalizeTitle(result.name);
+          const resultOriginalTitle = normalizeTitle(result.original_title);
+          const resultYear = Number.parseInt(String(result.release_date || '').slice(0, 4), 10);
+          const titleMatches =
+            (normalizedTmdbTitle && (resultTitle === normalizedTmdbTitle || resultOriginalTitle === normalizedTmdbTitle)) ||
+            (normalizedOriginalTitle && (resultTitle === normalizedOriginalTitle || resultOriginalTitle === normalizedOriginalTitle));
+          const yearMatches = Number.isNaN(targetYear) || Number.isNaN(resultYear) || resultYear === targetYear;
+
+          return titleMatches && yearMatches;
+        });
+      }
+
+      if (!matchingMovie) {
+        continue;
+      }
+
+      const downloadResponse = await axios.get(`${MAIN_API}/api/films/download/${matchingMovie.id}`);
+      const sources: NightflixSource[] = Array.isArray(downloadResponse.data?.sources)
+        ? downloadResponse.data.sources.filter((source: NightflixSource) => typeof source?.m3u8 === 'string' && source.m3u8.trim() !== '')
+        : [];
+      if (sources.length > 0) {
+        return { available: true, sources, darkinoId: String(matchingMovie.id) };
+      }
+    }
+
+    return false;
+  } catch (error: any) {
+    console.error('Error checking Darkino:', error);
+
+    // Don't retry if error is 500 (server error)
+    if (error.response && error.response.status === 500) {
+      console.error('Darkino server error (500), not retrying:', error);
+      return false;
+    }
+
+    if (retryCount < 3) {
+      if (updateRetryMessage) {
+        updateRetryMessage(retryMessages[retryCount % retryMessages.length]);
+      }
+      await new Promise(resolve => setTimeout(resolve, 1000 * (retryCount + 1)));
+      return checkDarkinoAvailability(movieTitle, _releaseDate, movieId, updateRetryMessage, retryCount + 1);
+    }
+    return false;
+  }
+};
+
+// Helper to pick Supervideo from Omega
+function getSupervideoFromOmega(omegaData: OmegaMovieResponse | null) {
+  if (!omegaData || !omegaData.player_links) return null;
+  return omegaData.player_links.find(
+    (p: { player: string; link: string; is_hd: boolean; label?: string }) => p.player && p.player.toLowerCase().includes('supervideo')
+  );
+}
+// Helper to pick Multi (lecteur6.com) from Coflix
+function getMultiFromCoflix(coflixData: CoflixResponse | null) {
+  if (!coflixData || !coflixData.player_links) return null;
+  return coflixData.player_links.find(
+    (p: { decoded_url: string; clone_url?: string; quality: string; language: string }) => getCoflixPreferredUrl(p).includes('lecteur6.com')
+  );
+}
+
+// Interface pour la réponse Rivestream
+interface RivestreamResponse {
+  data?: {
+    sources?: Array<{
+      quality: number;
+      url: string;
+      source: string;
+      size?: string;
+      format?: string;
+    }>;
+    captions?: Array<{
+      label: string;
+      file: string;
+    }>;
+  };
+}
+
+const WatchMovie: React.FC = () => {
+  const { tmdbid: encodedId } = useParams<{ tmdbid: string }>();
+
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const { currentProfile } = useProfile();
+
+  const id = encodedId ? getTmdbId(encodedId) : null;
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadingText, setLoadingText] = useState(t('watch.loadingSources'));
+  const [movieTitle, setMovieTitle] = useState<string>('');
+  const [backdropPath, setBackdropPath] = useState<string | null>(null);
+  const [posterPath, setPosterPath] = useState<string | null>(null);
+  const [contentCert, setContentCert] = useState<string>('');
+  const [isBlocked, setIsBlocked] = useState(false);
+
+  // Source states
+  const [selectedSource, setSelectedSource] = useState<PlayerSourceType | null>(null);
+  const [videoSource, setVideoSource] = useState<string | null>(null);
+  const [customSources, setCustomSources] = useState<string[]>([]);
+  const [frembedAvailable, setFrembedAvailable] = useState(true);
+  const [coflixData, setCoflixData] = useState<CoflixResponse | null>(null);
+  const [selectedPlayerLink, setSelectedPlayerLink] = useState<number>(0);
+  const [omegaData, setOmegaData] = useState<OmegaMovieResponse | null>(null);
+  const [selectedOmegaPlayer, setSelectedOmegaPlayer] = useState<number>(0);
+  const [darkinoAvailable, setDarkinoAvailable] = useState(false);
+  const [darkinoSources, setDarkinoSources] = useState<any[]>([]);
+  const [darkinoId, setDarkinoId] = useState<string | null>(null);
+  const [selectedDarkinoSource, setSelectedDarkinoSource] = useState<number>(0);
+  const [mp4Sources, setMp4Sources] = useState<{ url: string; label?: string; language?: string; isVip?: boolean }[]>([]);
+  const [selectedMp4Source, setSelectedMp4Source] = useState<number>(0);
+  const [watchProgress, setWatchProgress] = useState<number>(0);
+  const [loadingError, setLoadingError] = useState<boolean>(false);
+  const [nextMovie, setNextMovie] = useState<NextMovieType | null>(null);
+  const [loadingNextMovie, setLoadingNextMovie] = useState<boolean>(false);
+
+  // Nexus source states (Extracted)
+  const [nexusHlsSources, setNexusHlsSources] = useState<{ url: string; label: string }[]>([]);
+  const [nexusFileSources, setNexusFileSources] = useState<{ url: string; label: string }[]>([]);
+  const [selectedNexusHlsSource, setSelectedNexusHlsSource] = useState<number>(0);
+  const [selectedNexusFileSource, setSelectedNexusFileSource] = useState<number>(0);
+
+  // FStream source states
+  const [fstreamData, setFstreamData] = useState<FStreamResponse | null>(null);
+  const [fstreamSources, setFstreamSources] = useState<{ url: string; label: string; category: string }[]>([]);
+  const [selectedFstreamSource, setSelectedFstreamSource] = useState<number>(0);
+
+  // Wiflix source states
+  const [wiflixData, setWiflixData] = useState<WiflixMovieResponse | null>(null);
+  const [wiflixSources, setWiflixSources] = useState<{ url: string; label: string; category: string }[]>([]);
+
+  const [selectedWiflixSource, setSelectedWiflixSource] = useState<number>(0);
+
+  // Viper source states
+  const [viperData, setViperData] = useState<ViperMovieResponse | null>(null);
+  const [viperSources, setViperSources] = useState<{ url: string; label: string; quality: string; language: string }[]>([]);
+  const [selectedViperSource, setSelectedViperSource] = useState<number>(0);
+
+  // Loading states
+  const [loadingDarkino, setLoadingDarkino] = useState(true);
+  const [loadingCoflix, setLoadingCoflix] = useState(true);
+  const [loadingOmega, setLoadingOmega] = useState(true);
+  const [loadingFrembed, setLoadingFrembed] = useState(true);
+
+  const [loadingFstream, setLoadingFstream] = useState(true);
+  const [loadingWiflix, setLoadingWiflix] = useState(true);
+  const [loadingViper, setLoadingViper] = useState(true);
+  const [loadingExtractions, setLoadingExtractions] = useState(true); // Nouvel état pour les extractions
+  const [vipRetryMessage, setVipRetryMessage] = useState<string | null>(null);
+  const [onlyVostfrAvailable, setOnlyVostfrAvailable] = useState<boolean>(false);
+
+  // PurStream (Bravo) HLS states
+  const [purstreamSources, setPurstreamSources] = useState<{ url: string; label: string }[]>([]);
+
+  // Rivestream VO/VOSTFR HLS states
+  const [rivestreamSources, setRivestreamSources] = useState<{ url: string; label: string; quality: number; service: string; category: string }[]>([]);
+  const [selectedRivestreamSource, setSelectedRivestreamSource] = useState<number>(0);
+  const [loadingRivestream, setLoadingRivestream] = useState(false);
+  const [rivestreamLoaded, setRivestreamLoaded] = useState(false);
+  const [rivestreamCaptions, setRivestreamCaptions] = useState<{ label: string; file: string }[]>([]);
+
+  const currentSourceRef = useRef<string>('darkino');
+
+  // Ref to track if we're loading Rivestream sources (to keep menu open)
+  const isLoadingRivestreamRef = useRef(false);
+
+  const [embedUrl, setEmbedUrl] = useState<string | null>(null);
+  const [embedType, setEmbedType] = useState<string | null>(null);
+
+  // Ajouter un état pour afficher le menu qualité embed
+  const [showEmbedQuality, setShowEmbedQuality] = useState(false);
+
+  useEffect(() => {
+    if (!embedUrl) return;
+    const normalizedEmbedUrl = normalizeUqloadEmbedUrl(embedUrl);
+    if (normalizedEmbedUrl !== embedUrl) {
+      setEmbedUrl(normalizedEmbedUrl);
+    }
+  }, [embedUrl]);
+
+  const {
+    showAdFreePopup,
+    adType,
+    playerToShow,
+    shouldLoadIframe,
+    isSpecialPlayer,
+    is_vip,
+    showPopupForPlayer,
+    handlePopupClose,
+    handlePopupAccept,
+    resetVipStatus
+  } = useAdFreePopup();
+  const [adPopupTriggered, setAdPopupTriggered] = useState(false);
+  const [adPopupBypass, setAdPopupBypass] = useState(false);
+
+  // Ajout de l'état pour savoir si l'utilisateur a cliqué sur la pub
+  const [hasClickedAd, setHasClickedAd] = useState(false);
+
+  // Movix Wrapped 2026 - Track movie viewing time
+  useWrappedTracker({
+    mode: 'viewing',
+    viewingData: id ? {
+      contentType: 'movie',
+      contentId: id,
+    } : undefined,
+    isActive: !isLoading && !!id,
+  });
+
+  useEffect(() => {
+    // Fetch movie sources
+    if (id) {
+
+      // Call function directly instead of reference
+      const getVideoSources = async () => {
+        try {
+          await fetchVideoSources();
+          // Fetch next movie after sources to avoid dependency issues
+          await fetchNextMovie();
+        } catch (error) {
+          setIsLoading(false);
+        }
+      };
+
+      getVideoSources();
+    } else {
+      setIsLoading(false);
+    }
+  }, []); // Empty dependency array to run once
+
+  // Function to update VIP retry message
+  const updateVipRetryMessage = (message: string) => {
+    console.log("Updating retry message:", message);
+    setVipRetryMessage(message);
+    setLoadingText(message);
+  };
+
+  // Reset VIP retry message when loading finishes
+  useEffect(() => {
+    console.log("Loading states changed:", {
+      loadingDarkino,
+      loadingCoflix,
+      loadingOmega,
+      loadingFrembed,
+      loadingFstream,
+      loadingWiflix,
+      loadingViper
+    });
+
+    if (!loadingDarkino && !loadingCoflix && !loadingOmega && !loadingFrembed && !loadingFstream && !loadingWiflix && !loadingViper && !loadingExtractions) {
+      setVipRetryMessage(null);
+      setIsLoading(false);
+    }
+  }, [loadingDarkino, loadingCoflix, loadingOmega, loadingFrembed, loadingFstream, loadingWiflix, loadingViper, loadingExtractions]);
+
+  // Fetch video sources
+  const fetchVideoSources = async () => {
+    if (!id) {
+      return;
+    }
+
+    setVipRetryMessage(null);
+    setIsLoading(true);
+    setLoadingText(t('watch.loadingSources'));
+
+
+    try {
+      // Get movie details for title (needed for ad-free search and Darkino)
+      const tmdbResponse = await axios.get(`https://api.themoviedb.org/3/movie/${id}`, {
+        params: { api_key: TMDB_API_KEY, language: getTmdbLanguage() },
+      }).catch(error => {
+        console.error('Error fetching TMDB data:', error);
+        return { data: { title: '', backdrop_path: null, release_date: '' } };
+      });
+
+      setMovieTitle(tmdbResponse.data.title);
+      setBackdropPath(tmdbResponse.data.backdrop_path);
+      setPosterPath(tmdbResponse.data.poster_path);
+
+      // Age restriction check
+      const profileAge = currentProfile?.ageRestriction ?? 0;
+      if (profileAge > 0) {
+        try {
+          const certResponse = await axios.get(`https://api.themoviedb.org/3/movie/${id}/release_dates`, {
+            params: { api_key: TMDB_API_KEY },
+          });
+          const results = certResponse.data.results;
+          let cert = '';
+          const frRelease = results.find((r: any) => r.iso_3166_1 === 'FR');
+          if (frRelease?.release_dates) {
+            const theatrical = frRelease.release_dates.find((rd: any) => rd.type === 3 || rd.type === 2);
+            if (theatrical?.certification) cert = theatrical.certification;
+          }
+          if (!cert) {
+            const usRelease = results.find((r: any) => r.iso_3166_1 === 'US');
+            if (usRelease?.release_dates) {
+              const found = usRelease.release_dates.find((rd: any) => rd.certification !== '');
+              if (found?.certification) cert = found.certification;
+            }
+          }
+          if (cert && !isContentAllowed(cert, profileAge)) {
+            setContentCert(cert);
+            setIsBlocked(true);
+            setIsLoading(false);
+            return;
+          }
+        } catch (e) {
+          console.log('Could not fetch certifications for age check');
+        }
+      }
+
+      // Add movie to continueWatching (if history is enabled)
+      if (localStorage.getItem('settings_disable_history') !== 'true') {
+        const continueWatching = JSON.parse(localStorage.getItem('continueWatching') || '{"movies": [], "tv": []}');
+
+        // Ensure structure exists
+        if (!continueWatching.movies) continueWatching.movies = [];
+        if (!continueWatching.tv) continueWatching.tv = [];
+
+        const movieIdInt = parseInt(id);
+
+        // Check if movie already exists (handle both old and new format)
+        const existingIndex = continueWatching.movies.findIndex((item: any) => {
+          const itemId = typeof item === 'number' ? item : item.id;
+          return itemId === movieIdInt;
+        });
+
+        if (existingIndex !== -1) {
+          // Remove existing entry to move it to the front
+          continueWatching.movies.splice(existingIndex, 1);
+        }
+
+        // Add movie with timestamp at the beginning (no limit)
+        continueWatching.movies.unshift({
+          id: movieIdInt,
+          lastAccessed: new Date().toISOString()
+        });
+
+        localStorage.setItem('continueWatching', JSON.stringify(continueWatching));
+      }
+
+      // Initialize loading states for individual sources
+      setLoadingDarkino(true);
+      setLoadingCoflix(true);
+      setLoadingOmega(true);
+      setLoadingFrembed(true);
+      setLoadingFstream(true);
+      setLoadingFstream(true);
+      setLoadingWiflix(true);
+      setLoadingViper(true);
+      setLoadingExtractions(true);
+
+      // =========== INITIATE ALL ASYNCHRONOUS SOURCE CHECKS (NON-BLOCKING) ===========
+      const darkinoPromise = checkDarkinoAvailability(
+        tmdbResponse.data.title,
+        tmdbResponse.data.release_date,
+        id,
+        updateVipRetryMessage
+      ).catch(error => {
+        console.error('Error checking Darkino availability:', error);
+        return false; // Return a default/error state
+      }).finally(() => setLoadingDarkino(false));
+
+      const availabilityPromise = checkMovieAvailability(id)
+        .catch(error => {
+          console.error('Error checking Firebase/Frembed availability:', error);
+          return { customLinks: [], mp4Links: [], frembedAvailable: false }; // Default/error state
+        }).finally(() => setLoadingFrembed(false));
+
+      const coflixPromise = axios.get(`${MAIN_API}/api/tmdb/movie/${id}`)
+        .then(response => response.data)
+        .catch(error => {
+          console.error('Error fetching Coflix sources:', error);
+          return null;
+        }).finally(() => setLoadingCoflix(false));
+
+      const omegaPromise = (async () => {
+        try {
+          const imdbResponse = await axios.get(`https://api.themoviedb.org/3/movie/${id}/external_ids`, {
+            params: { api_key: TMDB_API_KEY },
+          });
+          if (imdbResponse.data && imdbResponse.data.imdb_id) {
+            const imdbId = imdbResponse.data.imdb_id;
+            const omegaResponse = await axios.get(`${MAIN_API}/api/imdb/movie/${imdbId}`);
+            if (omegaResponse.data && omegaResponse.data.player_links) {
+              omegaResponse.data.player_links = omegaResponse.data.player_links.map((player: { player: string; link: string; is_hd: boolean }) => ({
+                ...player,
+                label: "Sans pubs"
+              }));
+            }
+            return omegaResponse.data;
+          }
+          return null;
+        } catch (error) {
+          console.error('Error fetching Omega sources:', error);
+          return null;
+        }
+      })().finally(() => setLoadingOmega(false));
+
+
+
+      // =========== CHECK PURSTREAM (BRAVO) SOURCE ==========
+      const purstreamPromise = (async () => {
+        try {
+          const purstreamResponse = await axios.get(`${MAIN_API}/api/purstream/movie/${id}/stream`, {
+            headers: { ...getVipHeaders() }
+          });
+          return purstreamResponse.data;
+        } catch (error) {
+          console.error('Error fetching PurStream movie sources:', error);
+          return null;
+        }
+      })();
+
+      // =========== CHECK FSTREAM SOURCE ==========
+      const fstreamPromise = (async () => {
+        try {
+          // Envoyer la clé VIP via header pour vérification côté serveur
+          const fstreamResponse = await axios.get(`${MAIN_API}/api/fstream/movie/${id}`, {
+            headers: { ...getVipHeaders() }
+          });
+          return fstreamResponse.data;
+        } catch (error) {
+          console.error('Error fetching FStream movie sources:', error);
+          return null;
+        }
+      })().finally(() => setLoadingFstream(false));
+
+      // =========== CHECK WIFLIX (LYNX) SOURCE ===========
+      const wiflixPromise: Promise<WiflixMovieResponse | null> = axios.get(`${MAIN_API}/api/wiflix/movie/${id}`)
+        .then(response => response.data as WiflixMovieResponse)
+        .catch(error => {
+          console.error('Error fetching Wiflix/Lynx source:', error);
+          return null;
+        }).finally(() => setLoadingWiflix(false));
+
+      // =========== CHECK VIPER (CPASMAL) SOURCE ===========
+      const viperPromise: Promise<ViperMovieResponse | null> = axios.get(`${MAIN_API}/api/cpasmal/movie/${id}`)
+        .then(response => response.data as ViperMovieResponse)
+        .catch(error => {
+          console.error('Error fetching Viper/Cpasmal source:', error);
+          return null;
+        }).finally(() => setLoadingViper(false));
+
+      // =========== AWAIT ALL SOURCE CHECKS TO COMPLETE ===========
+      const [
+        darkinoResult,
+        availabilityResult,
+        coflixResult,
+        omegaResult,
+        purstreamResult,
+        fstreamResult,
+        wiflixResult,
+        viperResult
+      ] = await Promise.all([
+        darkinoPromise,
+        availabilityPromise,
+        coflixPromise,
+        omegaPromise,
+        purstreamPromise,
+        fstreamPromise,
+        wiflixPromise,
+        viperPromise
+      ]);
+
+      // =========== DÉBUT DES EXTRACTIONS (APRÈS LES REQUÊTES PRINCIPALES) ===========
+      console.log('🔄 Début des extractions M3U8...');
+
+      // =========== TRAITEMENT DES RÉSULTATS DE DARKINO ===========
+      if (darkinoResult && typeof darkinoResult === 'object' && 'available' in darkinoResult && darkinoResult.available) {
+        setDarkinoAvailable(true);
+        setDarkinoSources(darkinoResult.sources);
+        setDarkinoId(darkinoResult.darkinoId);
+      } else {
+        setDarkinoAvailable(false);
+        setDarkinoSources([]);
+        setDarkinoId(null);
+      }
+
+      // =========== TRAITEMENT DES RÉSULTATS DE FIREBASE/FREMBED ===========
+      const customLinks = availabilityResult.customLinks || [];
+      let fetchedMp4Sources: { url: string; label?: string; language?: string; isVip?: boolean }[] = availabilityResult.mp4Links || [];
+      const isFrembedAvailable = availabilityResult.frembedAvailable;
+
+      setMp4Sources(fetchedMp4Sources);
+      setCustomSources(customLinks);
+      setFrembedAvailable(isFrembedAvailable);
+
+      // =========== TRAITEMENT DES RÉSULTATS COFLIX ===========
+      if (coflixResult) {
+        setCoflixData(coflixResult);
+      }
+
+      // =========== TRAITEMENT DES RÉSULTATS OMEGA ===========
+      if (omegaResult) {
+        setOmegaData(omegaResult);
+        let supervideoM3u8: string | null = null;
+        let droploadM3u8: string | null = null;
+
+        // Extract m3u8 from supervideo and dropload players - Paralléliser
+        const omegaExtractionPromises = [];
+
+        const supervideo = getSupervideoFromOmega(omegaResult);
+        if (supervideo) {
+          omegaExtractionPromises.push(
+            extractM3u8FromEmbed(supervideo, MAIN_API).then(result => ({
+              type: 'supervideo',
+              result,
+              label: 'Supervideo HLS 720p'
+            }))
+          );
+        }
+
+        const dropload = omegaResult.player_links?.find((p: any) => p.player && p.player.toLowerCase().includes('dropload'));
+        if (dropload) {
+          omegaExtractionPromises.push(
+            extractM3u8FromEmbed(dropload, MAIN_API).then(result => ({
+              type: 'dropload',
+              result,
+              label: 'Dropload HLS 720p'
+            }))
+          );
+        }
+
+        if (omegaExtractionPromises.length > 0) {
+          const omegaResults = await Promise.all(omegaExtractionPromises);
+          omegaResults.forEach(({ type, result, label }) => {
+            if (type === 'supervideo' && result?.success && result.hlsUrl) {
+              supervideoM3u8 = result.hlsUrl;
+            } else if (type === 'dropload' && result?.success && result.m3u8Url) {
+              droploadM3u8 = result.m3u8Url;
+            }
+          });
+        }
+      }
+
+      // ========== INITIALISATION DES CONTAINERS POUR SOURCES EXTRAITES ==========
+      let finalHlsSources: { url: string; label: string }[] = [];
+      let finalFileSources: { url: string; label: string }[] = [];
+
+      // ========== PURSTREAM (BRAVO) SOURCES ==========
+      if (purstreamResult && purstreamResult.sources && purstreamResult.sources.length > 0) {
+        console.log('🎬 Processing PurStream (Bravo) result:', purstreamResult.sources.length, 'sources');
+        const bravoSources = purstreamResult.sources
+          .filter((s: { url: string; name: string; format: string }) => s.url)
+          .map((s: { url: string; name: string; format: string }) => ({
+            url: s.url,
+            label: (s.name || 'HLS').replace(/^pur\s*\|\s*/i, '').replace(/\s*\|\s*/g, ' - '),
+          }));
+        setPurstreamSources(bravoSources);
+        console.log(`✅ PurStream (Bravo) sources set: ${bravoSources.length}`);
+      }
+
+      // Add supervideo and dropload HLS sources if available (regardless of Nexus success)
+      if (omegaResult) {
+        console.log('🔍 Processing Omega result for supervideo/dropload extraction...');
+
+        // Paralléliser les extractions Omega
+        const omegaExtractionPromises = [];
+
+        const supervideo = getSupervideoFromOmega(omegaResult);
+        if (supervideo) {
+          console.log('🎬 Found supervideo player:', supervideo);
+          console.log('🔗 Supervideo URL to extract:', supervideo.link);
+          console.log('🌐 API endpoint will be:', `${MAIN_API}/api/extract-supervideo?url=${encodeURIComponent(supervideo.link)}`);
+
+          omegaExtractionPromises.push(
+            extractM3u8FromEmbed(supervideo, MAIN_API).then(result => ({
+              type: 'supervideo',
+              result,
+              label: 'Supervideo HLS 720p'
+            }))
+          );
+        } else {
+          console.log('❌ No supervideo player found in Omega result');
+        }
+
+        const dropload = omegaResult.player_links?.find((p: any) => p.player && p.player.toLowerCase().includes('dropload'));
+        if (dropload) {
+          console.log('🎬 Found dropload player:', dropload);
+          omegaExtractionPromises.push(
+            extractM3u8FromEmbed(dropload, MAIN_API).then(result => ({
+              type: 'dropload',
+              result,
+              label: 'Dropload HLS 720p'
+            }))
+          );
+        }
+
+        // Add Doodstream extraction for Omega
+        const doodstream = omegaResult.player_links?.find((p: any) => p.player && p.player.toLowerCase().includes('doodstream'));
+        if (doodstream && DOODSTREAM_EXTRACTIONS_ENABLED) {
+          console.log('🎬 Found doodstream player:', doodstream);
+          omegaExtractionPromises.push(
+            extractDoodStreamFile(doodstream.link).then(result => ({
+              type: 'doodstream',
+              result,
+              label: 'DoodStream'
+            }))
+          );
+        }
+
+        if (omegaExtractionPromises.length > 0) {
+          const omegaResults = await Promise.all(omegaExtractionPromises);
+          omegaResults.forEach(({ type, result, label }) => {
+            if (type === 'supervideo') {
+              console.log('📡 Supervideo extraction result:', result);
+              if (result?.success && result.hlsUrl) {
+                finalHlsSources = [...finalHlsSources, { url: result.hlsUrl, label }];
+                console.log(`✅ Added ${label} source (lower priority):`, result.hlsUrl);
+              } else {
+                console.warn('❌ Supervideo extraction failed or no HLS URL returned:', result);
+              }
+            } else if (type === 'dropload') {
+              console.log('📡 Dropload extraction result:', result);
+              if (result?.success && result.m3u8Url) {
+                finalHlsSources = [...finalHlsSources, { url: result.m3u8Url, label }];
+                console.log(`✅ Added ${label} source (lower priority):`, result.m3u8Url);
+              }
+            } else if (type === 'doodstream') {
+              console.log('📡 DoodStream extraction result:', result);
+              if (result?.success && result.m3u8Url) {
+                finalFileSources = [...finalFileSources, { url: result.m3u8Url, label }];
+                console.log(`✅ Added ${label} source:`, result.m3u8Url);
+              }
+            }
+          });
+        }
+      }
+
+      // Process Firebase dropload links for m3u8 extraction
+        if (customLinks.length > 0) {
+          console.log('🔍 Processing Firebase custom links for dropload extraction...');
+          const droploadLinks = customLinks.filter(url => url.toLowerCase().includes('dropload'));
+
+          // Paralléliser les extractions dropload Firebase
+          if (droploadLinks.length > 0) {
+            const droploadPromises = droploadLinks.map(async (droploadUrl) => {
+              console.log('🎬 Processing Firebase dropload link:', droploadUrl);
+              try {
+                const droploadResult = await extractM3u8FromEmbed({
+                  player: 'dropload',
+                  link: droploadUrl
+                }, MAIN_API);
+                console.log('📡 Firebase Dropload extraction result:', droploadResult);
+                if (droploadResult?.success && droploadResult.m3u8Url) {
+                  return { url: droploadResult.m3u8Url, label: 'Dropload HLS 720p' };
+                }
+              } catch (error) {
+                console.error('❌ Error extracting m3u8 from Firebase dropload link:', error);
+              }
+              return null;
+            });
+
+            const droploadResults = await Promise.all(droploadPromises);
+            const validDroploadResults = droploadResults.filter(result => result !== null);
+            finalHlsSources = [...finalHlsSources, ...validDroploadResults];
+            console.log(`✅ Added ${validDroploadResults.length} Firebase Dropload HLS sources`);
+          }
+        }
+      // Process Firebase custom links for VOE.SX and UQLOAD extraction
+      if (customLinks.length > 0) {
+        // VOE.SX (HLS) - Paralléliser
+        try {
+          const voeLinks = customLinks.filter(url => typeof url === 'string' && url.toLowerCase().includes('voe.'));
+          console.log(`[VOE/UQLOAD][MOVIE] Found ${voeLinks.length} VOE links from Firebase`, voeLinks);
+
+          if (voeLinks.length > 0) {
+            const voePromises = voeLinks.map(async (voeUrl) => {
+              try {
+                console.log('[VOE/UQLOAD][MOVIE] Extracting VOE m3u8 from Firebase link:', voeUrl);
+                const voeResult = await extractVoeM3u8(voeUrl);
+                if (voeResult?.success && voeResult.hlsUrl) {
+                  return { url: voeResult.hlsUrl, label: 'Voe HLS 720p' };
+                }
+              } catch (e) {
+                console.error('❌ Error extracting VOE m3u8 from Firebase link:', e);
+              }
+              return null;
+            });
+
+            const voeResults = await Promise.all(voePromises);
+            const validVoeResults = voeResults.filter(result => result !== null);
+            finalHlsSources = [...finalHlsSources, ...validVoeResults];
+            console.log(`[VOE/UQLOAD][MOVIE] Added ${validVoeResults.length} VOE HLS sources from Firebase`);
+          }
+        } catch { }
+
+        // UQLOAD (File MP4) - Paralléliser
+        try {
+          const uqLinks = customLinks.filter(url => typeof url === 'string' && url.toLowerCase().includes('uqload'));
+          console.log(`[VOE/UQLOAD][MOVIE] Found ${uqLinks.length} UQLOAD links from Firebase`, uqLinks);
+
+          if (uqLinks.length > 0) {
+            const uqPromises = uqLinks.map(async (uqUrl) => {
+              try {
+                console.log('[VOE/UQLOAD][MOVIE] Extracting UQLOAD file from Firebase link:', uqUrl);
+                const uqResult = await extractUqloadFile(normalizeUqloadEmbedUrl(uqUrl), MAIN_API);
+                if (uqResult?.success && uqResult.m3u8Url) {
+                  return { url: uqResult.m3u8Url, label: 'Uqload 360p' };
+                }
+              } catch (e) {
+                console.error('❌ Error extracting UQLOAD from Firebase link:', e);
+              }
+              return null;
+            });
+
+            const uqResults = await Promise.all(uqPromises);
+            const validUqResults = uqResults.filter(result => result !== null);
+            finalFileSources = [...finalFileSources, ...validUqResults];
+            console.log(`[VOE/UQLOAD][MOVIE] Added ${validUqResults.length} UQLOAD file sources from Firebase`);
+          }
+        } catch { }
+
+        // DOODSTREAM from Firebase custom links
+        try {
+          const doodLinks = customLinks.filter((url: string) => typeof url === 'string' && isDoodStreamEmbed(url));
+          if (doodLinks.length > 0) {
+            console.log(`[DOODSTREAM/FIREBASE][MOVIE] Found ${doodLinks.length} DoodStream links from Firebase`);
+            const doodPromises = doodLinks.map(async (doodUrl: string) => {
+              try {
+                const doodResult = await extractDoodStreamFile(doodUrl);
+                if (doodResult?.success && doodResult.m3u8Url) {
+                  return { url: doodResult.m3u8Url, label: 'DoodStream' };
+                }
+              } catch (e) {
+                console.error('❌ Error extracting DoodStream from Firebase link:', e);
+              }
+              return null;
+            });
+            const doodResults = await Promise.all(doodPromises);
+            const validDoodResults = doodResults.filter(result => result !== null);
+            finalFileSources = [...finalFileSources, ...validDoodResults];
+            console.log(`✅ Added ${validDoodResults.length} DoodStream sources from Firebase`);
+          }
+        } catch { }
+
+        // SEEKSTREAMING from Firebase custom links
+        try {
+          const seekLinks = customLinks.filter((url: string) => typeof url === 'string' && isSeekStreamingEmbed(url));
+          if (seekLinks.length > 0) {
+            console.log(`[SEEKSTREAMING/FIREBASE][MOVIE] Found ${seekLinks.length} SeekStreaming links from Firebase`);
+            const seekPromises = seekLinks.map(async (seekUrl: string) => {
+              try {
+                const seekResult = await extractSeekStreamingM3u8(seekUrl);
+                if (seekResult?.success && seekResult.hlsUrl) {
+                  return { url: seekResult.hlsUrl, label: 'SeekStreaming HLS' };
+                }
+              } catch (e) {
+                console.error('❌ Error extracting SeekStreaming from Firebase link:', e);
+              }
+              return null;
+            });
+            const seekResults = await Promise.all(seekPromises);
+            const validSeekResults = seekResults.filter(result => result !== null);
+            finalHlsSources = [...finalHlsSources, ...validSeekResults];
+            console.log(`✅ Added ${validSeekResults.length} SeekStreaming HLS sources from Firebase`);
+          }
+        } catch { }
+      }
+
+      // Process Coflix MULTI links for VOE.SX and UQLOAD extraction (ignore Omega)
+      if (coflixResult && Array.isArray(coflixResult.player_links) && coflixResult.player_links.length > 0) {
+        const decodedLinks = coflixResult.player_links
+          .map((p: any) => getCoflixPreferredUrl(p))
+          .filter((u: string) => !!u);
+
+        // VOE.SX from MULTI - Paralléliser
+        const voeMulti = decodedLinks.filter((u: string) => u.toLowerCase().includes('voe.'));
+        if (voeMulti.length > 0) {
+          const voeMultiPromises = voeMulti.map(async (vUrl: string) => {
+            try {
+              const voeResult = await extractVoeM3u8(vUrl);
+              if (voeResult?.success && voeResult.hlsUrl) {
+                return { url: voeResult.hlsUrl, label: 'Voe HLS 720p' };
+              }
+            } catch (e) {
+              console.error('❌ Error extracting VOE m3u8 from MULTI link:', e);
+            }
+            return null;
+          });
+
+          const voeMultiResults = await Promise.all(voeMultiPromises);
+          const validVoeMultiResults = voeMultiResults.filter(result => result !== null);
+          finalHlsSources = [...finalHlsSources, ...validVoeMultiResults];
+          console.log(`✅ Added ${validVoeMultiResults.length} VOE HLS sources from MULTI`);
+        }
+
+        // UQLOAD from MULTI - Paralléliser
+        const uqMulti = decodedLinks.filter((u: string) => u.toLowerCase().includes('uqload'));
+        if (uqMulti.length > 0) {
+          const uqMultiPromises = uqMulti.map(async (uUrl: string) => {
+            try {
+              const uqResult = await extractUqloadFile(normalizeUqloadEmbedUrl(uUrl), MAIN_API);
+              if (uqResult?.success && uqResult.m3u8Url) {
+                return { url: uqResult.m3u8Url, label: 'Uqload 360p' };
+              }
+            } catch (e) {
+              console.error('❌ Error extracting UQLOAD from MULTI link:', e);
+            }
+            return null;
+          });
+
+          const uqMultiResults = await Promise.all(uqMultiPromises);
+          const validUqMultiResults = uqMultiResults.filter(result => result !== null);
+          finalFileSources = [...finalFileSources, ...validUqMultiResults];
+          console.log(`✅ Added ${validUqMultiResults.length} UQLOAD file sources from MULTI`);
+        }
+
+        // --- DoodStream extraction from MULTI decoded links ---
+        if (DOODSTREAM_EXTRACTIONS_ENABLED) {
+          const doodMultiLinks = decodedLinks.filter((u: string) => isDoodStreamEmbed(u));
+          if (doodMultiLinks.length > 0) {
+            console.log(`🎬 Found ${doodMultiLinks.length} DoodStream links in MULTI`);
+            const doodMultiPromises = doodMultiLinks.map(async (doodUrl: string) => {
+              try {
+                const result = await extractDoodStreamFile(doodUrl);
+                if (result && result.success && result.m3u8Url) {
+                  const isVostfr = doodUrl.toLowerCase().includes('vostfr');
+                  return {
+                    url: result.m3u8Url,
+                    label: 'DoodStream' + (isVostfr ? ' VOSTFR' : ' VF'),
+                    source: 'doodstream-multi' as const,
+                    isDirect: true
+                  };
+                }
+                return null;
+              } catch (e) {
+                console.error('❌ DoodStream MULTI extraction failed:', e);
+                return null;
+              }
+            });
+            const doodMultiResults = await Promise.all(doodMultiPromises);
+            const validDoodMulti = doodMultiResults.filter(result => result !== null);
+            finalFileSources = [...finalFileSources, ...validDoodMulti];
+            console.log(`✅ Added ${validDoodMulti.length} DoodStream file sources from MULTI`);
+          }
+        }
+
+        // --- SeekStreaming extraction from MULTI decoded links ---
+        if (SEEKSTREAMING_EXTRACTIONS_ENABLED) {
+          const seekMultiLinks = decodedLinks.filter((u: string) => isSeekStreamingEmbed(u));
+          if (seekMultiLinks.length > 0) {
+            console.log(`🎬 Found ${seekMultiLinks.length} SeekStreaming links in MULTI`);
+            const seekMultiPromises = seekMultiLinks.map(async (seekUrl: string) => {
+              try {
+                const result = await extractSeekStreamingM3u8(seekUrl);
+                if (result && result.success && result.hlsUrl) {
+                  const isVostfr = seekUrl.toLowerCase().includes('vostfr');
+                  return {
+                    url: result.hlsUrl,
+                    label: 'SeekStreaming' + (isVostfr ? ' VOSTFR' : ' VF'),
+                    source: 'seekstreaming-multi' as const
+                  };
+                }
+                return null;
+              } catch (e) {
+                console.error('❌ SeekStreaming MULTI extraction failed:', e);
+                return null;
+              }
+            });
+            const seekMultiResults = await Promise.all(seekMultiPromises);
+            const validSeekMulti = seekMultiResults.filter(result => result !== null);
+            finalHlsSources = [...finalHlsSources, ...validSeekMulti];
+            console.log(`✅ Added ${validSeekMulti.length} SeekStreaming HLS sources from MULTI`);
+          }
+        }
+      }
+
+      console.log('🎯 Final HLS sources after supervideo/dropload processing:', finalHlsSources);
+
+      // =========== TRAITEMENT DES RÉSULTATS FSTREAM ===========
+      let fstreamProcessedSources: { url: string; label: string; category: string }[] = [];
+      const fstreamHlsSources: { url: string; label: string; category: string }[] = [];
+      const fsvidSources: { url: string; label: string; category: string }[] = [];
+
+      // Check if user is VIP or connected (utilise isUserVip pour inclure les utilisateurs connectés)
+      const isVip = isUserVip();
+
+      if (fstreamResult && fstreamResult.success && fstreamResult.players) {
+        console.log('🎬 Processing FStream result:', fstreamResult);
+        setFstreamData(fstreamResult);
+
+        // Process all FStream categories with priority to fsvid sources
+        const categories = ['VFQ', 'VFF', 'VOSTFR', 'Default'];
+        const otherSources: { url: string; label: string; category: string }[] = [];
+
+        categories.forEach(category => {
+          const categoryPlayers = fstreamResult.players[category] || [];
+          categoryPlayers.forEach((player: any) => {
+            const source = {
+              url: player.url,
+              label: `${category} - ${player.player} ${player.quality}`,
+              category: category
+            };
+
+            // Séparer les sources fsvid et premium des autres sources
+            const urlLower = player.url ? player.url.toLowerCase() : '';
+            const playerLower = player.player ? player.player.toLowerCase() : '';
+
+            // Ajouter fsvid si c'est détecté comme player FSvid, premium, ou si l'url contient fsvid
+            if (urlLower.includes('fsvid') || playerLower === 'premium' || playerLower === 'fsvid') {
+              fsvidSources.push(source); // Toujours garder pour l'extraction M3U8
+            } else {
+              otherSources.push(source);
+            }
+          });
+        });
+
+        // Pour l'affichage dans le menu : utiliser seulement les sources non-fsvid
+        // Pour l'extraction M3U8 : utiliser toutes les sources (fsvid + autres) si VIP
+        fstreamProcessedSources = [...otherSources];
+
+        console.log('✅ FStream sources processed:', fstreamProcessedSources.length);
+        console.log('🎯 FStream fsvid sources found:', fsvidSources.length);
+
+        // =========== EXTRACTION M3U8 DES SOURCES FSTREAM ===========
+        console.log('🔍 Extracting M3U8 from FStream sources...');
+
+        // Paralléliser les extractions M3U8 pour vidzy et fsvid
+        const fstreamExtractionPromises: Promise<{ type: string; result: M3u8Result | null; originalSource: { url: string; label: string; category: string } }>[] = [];
+
+        // Extraire M3U8 des sources vidzy
+        const vidzySources = fstreamProcessedSources.filter(source =>
+          source.url.toLowerCase().includes('vidzy')
+        );
+
+        if (vidzySources.length > 0) {
+          console.log(`🎬 Found ${vidzySources.length} vidzy sources, extracting M3U8...`);
+          vidzySources.forEach(vidzySource => {
+            fstreamExtractionPromises.push(
+              extractVidzyM3u8(vidzySource.url, MAIN_API).then(result => ({
+                type: 'vidzy',
+                result,
+                originalSource: vidzySource
+              }))
+            );
+          });
+        }
+
+        // Extraire M3U8 des sources fsvid
+        if (fsvidSources.length > 0) {
+          console.log(`🎬 Found ${fsvidSources.length} fsvid sources, extracting M3U8...`);
+          fsvidSources.forEach(fsvidSource => {
+            fstreamExtractionPromises.push(
+              extractFsvidM3u8(fsvidSource.url, MAIN_API).then(result => ({
+                type: 'fsvid',
+                result,
+                originalSource: fsvidSource
+              }))
+            );
+          });
+        }
+
+        // Extraire M3U8 des sources uqload
+        const uqloadSources = fstreamProcessedSources.filter(source =>
+          source.url.toLowerCase().includes('uqload')
+        );
+
+        if (uqloadSources.length > 0) {
+          console.log(`🎬 Found ${uqloadSources.length} uqload sources, extracting M3U8...`);
+          uqloadSources.forEach(uqloadSource => {
+            fstreamExtractionPromises.push(
+              extractUqloadFile(normalizeUqloadEmbedUrl(uqloadSource.url), MAIN_API).then(result => ({
+                type: 'uqload',
+                result,
+                originalSource: uqloadSource
+              }))
+            );
+          });
+        }
+
+        if (fstreamExtractionPromises.length > 0) {
+          const fstreamExtractionResults = await Promise.all(fstreamExtractionPromises);
+
+          // Séparer les sources fsvid, vidzy et uqload pour les ordonner correctement
+          const fsvidHlsSources: { url: string; label: string; category: string }[] = [];
+          const vidzyHlsSources: { url: string; label: string; category: string }[] = [];
+          const uqloadHlsSources: { url: string; label: string; category: string }[] = [];
+
+          fstreamExtractionResults.forEach(({ type, result, originalSource }) => {
+            if (type === 'fsvid' && result?.success && result.m3u8Url) {
+              fsvidHlsSources.push({
+                url: result.m3u8Url,
+                label: `${originalSource.category} - Fsvid HLS`,
+                category: originalSource.category
+              });
+              console.log(`✅ Added Fsvid HLS source: ${result.m3u8Url}`);
+            } else if (type === 'vidzy' && result?.success && result.m3u8Url) {
+              vidzyHlsSources.push({
+                url: result.m3u8Url,
+                label: `${originalSource.category} - Vidzy HLS`,
+                category: originalSource.category
+              });
+              console.log(`✅ Added Vidzy HLS source: ${result.m3u8Url}`);
+            } else if (type === 'uqload' && result?.success && result.m3u8Url) {
+              uqloadHlsSources.push({
+                url: result.m3u8Url,
+                label: `${originalSource.category} - Uqload HLS`,
+                category: originalSource.category
+              });
+              console.log(`✅ Added Uqload HLS source: ${result.m3u8Url}`);
+            }
+          });
+
+          // Ajouter fsvid en premier, puis vidzy, puis uqload
+          fstreamHlsSources.push(...fsvidHlsSources, ...vidzyHlsSources, ...uqloadHlsSources);
+        }
+
+        console.log(`🎯 FStream HLS sources extracted: ${fstreamHlsSources.length}`);
+      } else {
+        setFstreamData(null);
+        console.log('❌ No FStream sources available');
+      }
+
+      setFstreamSources(fstreamProcessedSources);
+      console.log('🎯 [WatchMovie] FStream sources set:', fstreamProcessedSources.length, fstreamProcessedSources);
+
+      // Ajouter les sources HLS FStream aux sources finales
+      if (fstreamHlsSources.length > 0) {
+        // Prioriser les sources VFF puis Default pour FStream HLS
+        const fsvidVffSources = fstreamHlsSources.filter(s => s.category === 'VFF');
+        const fsvidDefaultSources = fstreamHlsSources.filter(s => s.category === 'Default');
+        const fsvidOtherSources = fstreamHlsSources.filter(s => s.category !== 'VFF' && s.category !== 'Default');
+
+        const prioritizedFstreamHls = [...fsvidVffSources, ...fsvidDefaultSources, ...fsvidOtherSources];
+        finalHlsSources = [...prioritizedFstreamHls, ...finalHlsSources];
+        console.log(`🎯 Added ${fstreamHlsSources.length} FStream HLS sources to final sources`);
+      }
+
+      // =========== TRAITEMENT DES RÉSULTATS WIFLIX (LYNX) ===========
+      let wiflixProcessedSources: { url: string; label: string; category: string }[] = [];
+
+      if (wiflixResult && wiflixResult.success && wiflixResult.players) {
+        console.log('🎬 Processing Wiflix/Lynx result:', wiflixResult);
+        setWiflixData(wiflixResult);
+
+        // Process Wiflix categories with priority to VF sources
+        const categories = ['vf', 'vostfr'];
+        const vfSources: { url: string; label: string; category: string }[] = [];
+        const vostfrSources: { url: string; label: string; category: string }[] = [];
+
+        categories.forEach(category => {
+          const categoryPlayers = wiflixResult.players[category as keyof typeof wiflixResult.players] || [];
+          categoryPlayers.forEach((player: any) => {
+            const source = {
+              url: player.url,
+              label: `Lynx ${category.toUpperCase()} - ${player.name}`,
+              category: category.toUpperCase()
+            };
+
+            if (category === 'vf') {
+              vfSources.push(source);
+            } else {
+              vostfrSources.push(source);
+            }
+          });
+        });
+
+        // Mettre les sources VF en premier
+        wiflixProcessedSources = [...vfSources, ...vostfrSources];
+
+        console.log('✅ Wiflix/Lynx sources processed:', wiflixProcessedSources.length);
+        console.log('🎯 Wiflix VF sources found:', vfSources.length);
+
+        // =========== EXTRACTION ONEUPLOAD DEPUIS WIFLIX ===========
+        console.log('🔍 Extracting OneUpload sources from Wiflix...');
+
+        // Identifier les sources OneUpload dans Wiflix
+        const oneUploadSources = wiflixProcessedSources.filter(source =>
+          isOneUploadEmbed(source.url)
+        );
+
+        if (oneUploadSources.length > 0) {
+          console.log(`🎬 Found ${oneUploadSources.length} OneUpload sources in Wiflix, extracting...`);
+
+          // Paralléliser les extractions OneUpload
+          const oneUploadExtractionPromises = oneUploadSources.map(async (oneUploadSource) => {
+            try {
+              const result = await extractOneUploadSources(oneUploadSource.url);
+              return { result, originalSource: oneUploadSource };
+            } catch (error) {
+              console.error('Error extracting OneUpload source:', error);
+              return { result: null, originalSource: oneUploadSource };
+            }
+          });
+
+          const oneUploadExtractionResults = await Promise.all(oneUploadExtractionPromises);
+
+          // Traiter les résultats OneUpload et les ajouter aux sources Nexus
+          oneUploadExtractionResults.forEach(({ result, originalSource }) => {
+            if (result?.success) {
+              if (result.hlsUrl) {
+                // Source HLS trouvée
+                finalHlsSources.push({
+                  url: result.hlsUrl,
+                  label: `Nexus ${originalSource.category} - OneUpload HLS`
+                });
+                console.log(`✅ Added OneUpload HLS source: ${result.hlsUrl}`);
+              } else if (result.m3u8Url) {
+                // Source MP4 ou autre trouvée
+                finalFileSources.push({
+                  url: result.m3u8Url,
+                  label: `Nexus ${originalSource.category} - OneUpload`
+                });
+                console.log(`✅ Added OneUpload file source: ${result.m3u8Url}`);
+              }
+            } else {
+              console.log(`❌ Failed to extract OneUpload source: ${originalSource.url}`);
+            }
+          });
+
+          console.log(`✅ OneUpload extraction completed. HLS sources: ${finalHlsSources.length}, File sources: ${finalFileSources.length}`);
+        } else {
+          console.log('ℹ️ No OneUpload sources found in Wiflix');
+        }
+
+        // =========== EXTRACTION VOE DEPUIS WIFLIX ===========
+        console.log('🔍 Extracting VOE sources from Wiflix...');
+
+        // Identifier les sources VOE dans Wiflix
+        const voeSources = wiflixProcessedSources.filter(source =>
+          isVoeEmbed(source.url)
+        );
+
+        if (voeSources.length > 0) {
+          console.log(`🎬 Found ${voeSources.length} VOE sources in Wiflix, extracting...`);
+
+          // Paralléliser les extractions VOE
+          const voeExtractionPromises = voeSources.map(async (voeSource) => {
+            try {
+              console.log(`[VOE/WIFLIX][MOVIE] Extracting VOE m3u8 from Wiflix link: ${voeSource.url}`);
+              const voeResult = await extractVoeM3u8(voeSource.url);
+              return { result: voeResult, originalSource: voeSource };
+            } catch (error) {
+              console.error('Error extracting VOE source:', error);
+              return { result: null, originalSource: voeSource };
+            }
+          });
+
+          const voeExtractionResults = await Promise.all(voeExtractionPromises);
+
+          // Traiter les résultats VOE et les ajouter aux sources HLS
+          const validVoeResults: { url: string; label: string }[] = [];
+          voeExtractionResults.forEach(({ result, originalSource }) => {
+            if (result?.success && result.hlsUrl) {
+              validVoeResults.push({
+                url: result.hlsUrl,
+                label: `Voe HLS ${originalSource.category}`
+              });
+              console.log(`✅ Added VOE HLS source: ${result.hlsUrl}`);
+            } else {
+              console.log(`❌ Failed to extract VOE source: ${originalSource.url}`);
+            }
+          });
+
+          if (validVoeResults.length > 0) {
+            // Prioriser les sources VF puis VOSTFR pour VOE
+            const voeVfSources = validVoeResults.filter(s => s.label.includes('VF'));
+            const voeVostfrSources = validVoeResults.filter(s => s.label.includes('VOSTFR'));
+            const prioritizedVoeSources = [...voeVfSources, ...voeVostfrSources];
+
+            finalHlsSources = [...prioritizedVoeSources, ...finalHlsSources];
+            console.log(`✅ VOE extraction completed. Added ${validVoeResults.length} VOE HLS sources to final sources`);
+          } else {
+            console.log('❌ No valid VOE sources extracted from Wiflix');
+          }
+        } else {
+          console.log('ℹ️ No VOE sources found in Wiflix');
+        }
+
+        // =========== EXTRACTION UQLOAD DEPUIS WIFLIX ===========
+        console.log('🔍 Extracting UQLOAD sources from Wiflix...');
+
+        // Identifier les sources UQLOAD dans Wiflix
+        const uqloadSources = wiflixProcessedSources.filter(source =>
+          source.url.toLowerCase().includes('uqload')
+        );
+
+        if (uqloadSources.length > 0) {
+          console.log(`🎬 Found ${uqloadSources.length} UQLOAD sources in Wiflix, extracting...`);
+
+          // Paralléliser les extractions UQLOAD
+          const uqloadExtractionPromises = uqloadSources.map(async (uqloadSource) => {
+            try {
+              console.log(`[UQLOAD/WIFLIX][MOVIE] Extracting UQLOAD file from Wiflix link: ${uqloadSource.url}`);
+              const uqloadResult = await extractUqloadFile(normalizeUqloadEmbedUrl(uqloadSource.url), MAIN_API);
+              return { result: uqloadResult, originalSource: uqloadSource };
+            } catch (error) {
+              console.error('Error extracting UQLOAD source:', error);
+              return { result: null, originalSource: uqloadSource };
+            }
+          });
+
+          const uqloadExtractionResults = await Promise.all(uqloadExtractionPromises);
+
+          // Traiter les résultats UQLOAD et les ajouter aux sources File
+          const validUqloadResults: { url: string; label: string }[] = [];
+          uqloadExtractionResults.forEach(({ result, originalSource }) => {
+            if (result?.success && result.m3u8Url) {
+              validUqloadResults.push({
+                url: result.m3u8Url,
+                label: `Uqload ${originalSource.category}`
+              });
+              console.log(`✅ Added UQLOAD file source: ${result.m3u8Url}`);
+            } else {
+              console.log(`❌ Failed to extract UQLOAD source: ${originalSource.url}`);
+            }
+          });
+
+          if (validUqloadResults.length > 0) {
+            // Prioriser les sources VF puis VOSTFR pour UQLOAD
+            const uqloadVfSources = validUqloadResults.filter(s => s.label.includes('VF'));
+            const uqloadVostfrSources = validUqloadResults.filter(s => s.label.includes('VOSTFR'));
+            const prioritizedUqloadSources = [...uqloadVfSources, ...uqloadVostfrSources];
+
+            finalFileSources = [...prioritizedUqloadSources, ...finalFileSources];
+            console.log(`✅ UQLOAD extraction completed. Added ${validUqloadResults.length} UQLOAD file sources to final sources`);
+          } else {
+            console.log('❌ No valid UQLOAD sources extracted from Wiflix');
+          }
+        } else {
+          console.log('ℹ️ No UQLOAD sources found in Wiflix');
+        }
+
+        // --- DoodStream extraction from Wiflix ---
+        if (DOODSTREAM_EXTRACTIONS_ENABLED) {
+          const doodWiflixSources = wiflixProcessedSources.filter(source =>
+            isDoodStreamEmbed(source.url)
+          );
+          if (doodWiflixSources.length > 0) {
+            console.log(`🎬 Found ${doodWiflixSources.length} DoodStream sources in Wiflix, extracting...`);
+            const doodPromises = doodWiflixSources.map(async (source) => {
+              try {
+                const result = await extractDoodStreamFile(source.url);
+                if (result && result.success && result.m3u8Url) {
+                  const isVostfr = source.label?.toLowerCase().includes('vostfr') || source.category?.toLowerCase().includes('vostfr');
+                  return {
+                    url: result.m3u8Url,
+                    label: 'DoodStream' + (isVostfr ? ' VOSTFR' : ' VF'),
+                    source: 'doodstream-wiflix' as const,
+                    isDirect: true,
+                    isVostfr
+                  };
+                }
+                return null;
+              } catch (e) {
+                console.error('❌ DoodStream Wiflix extraction failed:', e);
+                return null;
+              }
+            });
+            const doodResults = await Promise.all(doodPromises);
+            const validDood = doodResults.filter(r => r !== null);
+            const vfDood = validDood.filter(r => !r.isVostfr);
+            const vostfrDood = validDood.filter(r => r.isVostfr);
+            finalFileSources = [...vfDood, ...finalFileSources, ...vostfrDood];
+            console.log(`✅ Added ${validDood.length} DoodStream file sources from Wiflix`);
+          }
+        }
+
+        // --- SeekStreaming extraction from Wiflix ---
+        if (SEEKSTREAMING_EXTRACTIONS_ENABLED) {
+          const seekWiflixSources = wiflixProcessedSources.filter(source =>
+            isSeekStreamingEmbed(source.url)
+          );
+          if (seekWiflixSources.length > 0) {
+            console.log(`🎬 Found ${seekWiflixSources.length} SeekStreaming sources in Wiflix, extracting...`);
+            const seekPromises = seekWiflixSources.map(async (source) => {
+              try {
+                const result = await extractSeekStreamingM3u8(source.url);
+                if (result && result.success && result.hlsUrl) {
+                  const isVostfr = source.label?.toLowerCase().includes('vostfr') || source.category?.toLowerCase().includes('vostfr');
+                  return {
+                    url: result.hlsUrl,
+                    label: 'SeekStreaming' + (isVostfr ? ' VOSTFR' : ' VF'),
+                    source: 'seekstreaming-wiflix' as const,
+                    isVostfr
+                  };
+                }
+                return null;
+              } catch (e) {
+                console.error('❌ SeekStreaming Wiflix extraction failed:', e);
+                return null;
+              }
+            });
+            const seekResults = await Promise.all(seekPromises);
+            const validSeek = seekResults.filter(r => r !== null);
+            const vfSeek = validSeek.filter(r => !r.isVostfr);
+            const vostfrSeek = validSeek.filter(r => r.isVostfr);
+            finalHlsSources = [...vfSeek, ...finalHlsSources, ...vostfrSeek];
+            console.log(`✅ Added ${validSeek.length} SeekStreaming HLS sources from Wiflix`);
+          }
+        }
+      } else {
+        setWiflixData(null);
+        console.log('❌ No Wiflix/Lynx sources available');
+      }
+
+      setWiflixSources(wiflixProcessedSources);
+      console.log('🎯 [WatchMovie] Wiflix/Lynx sources set:', wiflixProcessedSources.length, wiflixProcessedSources);
+
+      // =========== TRAITEMENT DES RÉSULTATS VIPER ===========
+      const viperProcessedSources: { url: string; label: string; quality: string; language: string }[] = [];
+
+      if (viperResult && viperResult.links) {
+        console.log('🎬 Processing Viper/Cpasmal result:', viperResult);
+        setViperData(viperResult);
+
+        const vfSources = viperResult.links.vf || [];
+        const vostfrSources = viperResult.links.vostfr || [];
+
+        // Process VF
+        vfSources.forEach((source, index) => {
+          viperProcessedSources.push({
+            url: source.url,
+            label: `Viper VF - ${source.server} ${index + 1}`,
+            quality: 'HD',
+            language: 'VF'
+          });
+        });
+
+        // Process VOSTFR
+        vostfrSources.forEach((source, index) => {
+          viperProcessedSources.push({
+            url: source.url,
+            label: `Viper VOSTFR - ${source.server} ${index + 1}`,
+            quality: 'HD',
+            language: 'VOSTFR'
+          });
+        });
+
+        console.log('✅ Viper sources processed:', viperProcessedSources.length);
+      } else {
+        setViperData(null);
+        console.log('❌ No Viper sources available');
+      }
+      setViperSources(viperProcessedSources);
+
+      // =========== EXTRACTION VOE DEPUIS VIPER ===========
+      if (viperProcessedSources.length > 0) {
+        console.log('🔍 Extracting VOE sources from Viper...');
+
+        // Identifier les sources VOE dans Viper (soit par label, soit par URL)
+        const voeViperSources = viperProcessedSources.filter(source =>
+          source.label.toLowerCase().includes('voe') || isVoeEmbed(source.url)
+        );
+
+        if (voeViperSources.length > 0) {
+          console.log(`🎬 Found ${voeViperSources.length} VOE sources in Viper, extracting...`);
+
+          // Paralléliser les extractions VOE
+          const voeExtractionPromises = voeViperSources.map(async (voeSource) => {
+            try {
+              console.log(`[VOE/VIPER][MOVIE] Extracting VOE m3u8 from Viper link: ${voeSource.url}`);
+              const voeResult = await extractVoeM3u8(voeSource.url);
+              return { result: voeResult, originalSource: voeSource };
+            } catch (error) {
+              console.error('Error extracting VOE source from Viper:', error);
+              return { result: null, originalSource: voeSource };
+            }
+          });
+
+          const voeExtractionResults = await Promise.all(voeExtractionPromises);
+
+          // Traiter les résultats VOE et les ajouter aux sources HLS
+          const validVoeResults: { url: string; label: string }[] = [];
+          voeExtractionResults.forEach(({ result, originalSource }) => {
+            if (result?.success && result.hlsUrl) {
+              validVoeResults.push({
+                url: result.hlsUrl,
+                label: `Voe HLS ${originalSource.language}`
+              });
+              console.log(`✅ Added Viper VOE HLS source: ${result.hlsUrl}`);
+            } else {
+              console.log(`❌ Failed to extract Viper VOE source: ${originalSource.url}`);
+            }
+          });
+
+          if (validVoeResults.length > 0) {
+            // Prioriser VF
+            const vf = validVoeResults.filter(s => s.label.includes('VF'));
+            const vostfr = validVoeResults.filter(s => s.label.includes('VOSTFR'));
+
+            finalHlsSources = [...vf, ...vostfr, ...finalHlsSources];
+            console.log(`✅ Viper VOE extraction completed. Added ${validVoeResults.length} sources.`);
+          }
+        }
+      }
+
+      // =========== EXTRACTION UQLOAD DEPUIS VIPER ===========
+      if (viperProcessedSources.length > 0) {
+        console.log('🔍 Extracting UQLOAD sources from Viper...');
+
+        // Identifier les sources UQLOAD dans Viper
+        const uqloadViperSources = viperProcessedSources.filter(source =>
+          source.label.toLowerCase().includes('uqload') || source.url.toLowerCase().includes('uqload')
+        );
+
+        if (uqloadViperSources.length > 0) {
+          console.log(`🎬 Found ${uqloadViperSources.length} UQLOAD sources in Viper, extracting...`);
+
+          // Paralléliser les extractions UQLOAD
+          const uqloadExtractionPromises = uqloadViperSources.map(async (uqloadSource) => {
+            try {
+              console.log(`[UQLOAD/VIPER][MOVIE] Extracting UQLOAD file from Viper link: ${uqloadSource.url}`);
+              const uqloadResult = await extractUqloadFile(normalizeUqloadEmbedUrl(uqloadSource.url), MAIN_API);
+              return { result: uqloadResult, originalSource: uqloadSource };
+            } catch (error) {
+              console.error('Error extracting UQLOAD source from Viper:', error);
+              return { result: null, originalSource: uqloadSource };
+            }
+          });
+
+          const uqloadExtractionResults = await Promise.all(uqloadExtractionPromises);
+
+          // Traiter les résultats UQLOAD et les ajouter aux sources
+          const validUqloadResults: { url: string; label: string }[] = [];
+          uqloadExtractionResults.forEach(({ result, originalSource }) => {
+            if (result?.success && (result.hlsUrl || result.m3u8Url)) {
+              const extractedUrl = result.hlsUrl || result.m3u8Url || '';
+              validUqloadResults.push({
+                url: extractedUrl,
+                label: `Uqload ${originalSource.language}`
+              });
+              console.log(`✅ Added Viper UQLOAD source: ${extractedUrl}`);
+            } else {
+              console.log(`❌ Failed to extract Viper UQLOAD source: ${originalSource.url}`);
+            }
+          });
+
+          if (validUqloadResults.length > 0) {
+            // Prioriser VF
+            const vf = validUqloadResults.filter(s => s.label.includes('VF'));
+            const vostfr = validUqloadResults.filter(s => s.label.includes('VOSTFR'));
+
+            finalHlsSources = [...finalHlsSources, ...vf, ...vostfr];
+            console.log(`✅ Viper UQLOAD extraction completed. Added ${validUqloadResults.length} sources.`);
+          }
+        }
+
+        // --- DoodStream extraction from Viper ---
+        if (viperProcessedSources.length > 0 && DOODSTREAM_EXTRACTIONS_ENABLED) {
+          const doodViperSources = viperProcessedSources.filter((source) =>
+            source.label?.toLowerCase().includes('dood') || isDoodStreamEmbed(source.url)
+          );
+          
+          if (doodViperSources.length > 0) {
+            console.log(`🎬 Found ${doodViperSources.length} DoodStream sources in Viper, extracting...`);
+            const doodPromises = doodViperSources.map(async (source) => {
+              try {
+                const result = await extractDoodStreamFile(source.url);
+                if (result && result.success && result.m3u8Url) {
+                  const isVostfr = source.label?.toLowerCase().includes('vostfr') || source.language === 'VOSTFR';
+                  return {
+                    url: result.m3u8Url,
+                    label: 'DoodStream' + (isVostfr ? ' VOSTFR' : ' VF'),
+                    source: 'doodstream-viper' as const,
+                    isDirect: true,
+                    isVostfr
+                  };
+                }
+                return null;
+              } catch (e) {
+                console.error('❌ DoodStream Viper extraction failed:', e);
+                return null;
+              }
+            });
+            const doodResults = await Promise.all(doodPromises);
+            const validDood = doodResults.filter(r => r !== null);
+            const vfDood = validDood.filter(r => !r.isVostfr);
+            const vostfrDood = validDood.filter(r => r.isVostfr);
+            finalFileSources = [...vfDood, ...finalFileSources, ...vostfrDood];
+            console.log(`✅ Added ${validDood.length} DoodStream file sources from Viper`);
+          }
+        }
+
+        // --- SeekStreaming extraction from Viper ---
+        if (SEEKSTREAMING_EXTRACTIONS_ENABLED) {
+          const allViperSourcesSeek = [...(viperResult?.links?.vf || []), ...(viperResult?.links?.vostfr || [])];
+          const seekViperSources = allViperSourcesSeek.filter((source: any) =>
+            source.label?.toLowerCase().includes('seekstream') || source.label?.toLowerCase().includes('embed4me') || isSeekStreamingEmbed(source.url)
+          );
+          if (seekViperSources.length > 0) {
+            console.log(`🎬 Found ${seekViperSources.length} SeekStreaming sources in Viper, extracting...`);
+            const seekPromises = seekViperSources.map(async (source: any) => {
+              try {
+                const result = await extractSeekStreamingM3u8(source.url);
+                if (result && result.success && result.hlsUrl) {
+                  const isVostfr = source.label?.toLowerCase().includes('vostfr') || (viperResult?.links?.vostfr || []).includes(source);
+                  return {
+                    url: result.hlsUrl,
+                    label: 'SeekStreaming' + (isVostfr ? ' VOSTFR' : ' VF'),
+                    source: 'seekstreaming-viper' as const,
+                    isVostfr
+                  };
+                }
+                return null;
+              } catch (e) {
+                console.error('❌ SeekStreaming Viper extraction failed:', e);
+                return null;
+              }
+            });
+            const seekResults = await Promise.all(seekPromises);
+            const validSeek = seekResults.filter(r => r !== null);
+            const vfSeek = validSeek.filter(r => !r.isVostfr);
+            const vostfrSeek = validSeek.filter(r => r.isVostfr);
+            finalHlsSources = [...vfSeek, ...finalHlsSources, ...vostfrSeek];
+            console.log(`✅ Added ${validSeek.length} SeekStreaming HLS sources from Viper`);
+          }
+        }
+      }
+
+      // Set the final sources
+      setNexusHlsSources(finalHlsSources);
+      setNexusFileSources(finalFileSources);
+
+      // =========== FIN DES EXTRACTIONS ===========
+      console.log('✅ Extractions M3U8 terminées');
+      setLoadingExtractions(false);
+
+      // --- Determine Default Selected Source ---
+      // Priorité : nexus (hls/file) > darkino > mp4 > fstream > omega > wiflix > coflix > fstream > frembed > custom > vostfr
+      // First select Nexus if available (prioritized over Darkino)
+
+      console.log('=== MOVIE SOURCE PRIORITY LOGIC ===');
+      console.log('Final HLS sources (Nexus + FStream + extracted):', finalHlsSources.length);
+      console.log('Final HLS sources details:', finalHlsSources);
+      console.log('Final File sources (Nexus + extracted):', finalFileSources.length);
+      console.log('Final File sources details:', finalFileSources);
+      console.log('Darkino available:', darkinoResult && typeof darkinoResult === 'object' ? darkinoResult.available : false);
+      console.log('Darkino sources count:', darkinoResult && typeof darkinoResult === 'object' ? darkinoResult.sources?.length : 0);
+      console.log('FStream sources available:', fstreamProcessedSources.length);
+      console.log('FStream HLS sources extracted:', fstreamHlsSources.length);
+      console.log('FStream HLS sources extracted:', fstreamHlsSources.length);
+      console.log('Wiflix/Lynx sources available:', wiflixProcessedSources.length);
+      console.log('Viper sources available:', viperProcessedSources.length);
+
+      if (finalHlsSources.length > 0) {
+        // Vérifier si la première source est FStream HLS
+        const firstSource = finalHlsSources[0];
+        if (firstSource.label && (firstSource.label.includes('Vidzy HLS') || firstSource.label.includes('Fsvid HLS'))) {
+          console.log('✅ Selecting FSTREAM HLS as primary source');
+          console.log('🎯 Selected HLS URL:', firstSource.url);
+          console.log('🏷️ Selected HLS Label:', firstSource.label);
+          setSelectedSource('nexus_hls'); // Utiliser nexus_hls pour les sources HLS
+          setSelectedNexusHlsSource(0);
+          setVideoSource(firstSource.url);
+          currentSourceRef.current = 'nexus_hls';
+          setOnlyVostfrAvailable(false);
+        } else {
+          console.log('✅ Selecting NEXUS HLS as primary source');
+          console.log('🎯 Selected HLS URL:', firstSource.url);
+          console.log('🏷️ Selected HLS Label:', firstSource.label);
+          setSelectedSource('nexus_hls');
+          setSelectedNexusHlsSource(0);
+          setVideoSource(firstSource.url);
+          currentSourceRef.current = 'nexus_hls';
+          setOnlyVostfrAvailable(false);
+        }
+      }
+      // Special case for movie ID 1218925 - force custom source selection
+      else if (id === '1218925') {
+        console.log('🎯 Special case: Movie ID 1218925 - selecting custom source');
+        setSelectedSource('custom');
+        setEmbedUrl('https://movix1.embedseek.com/#h6j8');
+        setEmbedType('custom');
+        currentSourceRef.current = 'custom';
+        setOnlyVostfrAvailable(false);
+      }
+      // Special case for movie ID 1311031 - force custom source selection
+      else if (id === '1311031') {
+        console.log('🎯 Special case: Movie ID 1311031 - selecting custom source');
+
+        // Fetch custom links from API for this specific movie
+        try {
+          const customResponse = await axios.get(`${MAIN_API}/api/links/movie/${id}`);
+          if (customResponse.data && customResponse.data.success && customResponse.data.data && customResponse.data.data.links) {
+            const customLinks = customResponse.data.data.links;
+            // Get the first custom link (index 0)
+            const firstCustomLink = customLinks[0];
+            const customUrl = typeof firstCustomLink === 'string' ? firstCustomLink : firstCustomLink.url;
+
+            console.log('🎯 Using custom URL from API:', customUrl);
+            setSelectedSource('custom');
+            setEmbedUrl(customUrl);
+            setEmbedType('custom');
+            currentSourceRef.current = 'custom';
+            setOnlyVostfrAvailable(false);
+          } else {
+            // Fallback to hardcoded URL if API fails
+            console.log('⚠️ API failed, using fallback URL');
+            setSelectedSource('custom');
+            setEmbedUrl('https://movix1.embedseek.com/#ug3i');
+            setEmbedType('custom');
+            currentSourceRef.current = 'custom';
+            setOnlyVostfrAvailable(false);
+          }
+        } catch (error) {
+          console.error('Error fetching custom links for movie 1311031:', error);
+          // Fallback to hardcoded URL if API fails
+          setSelectedSource('custom');
+          setEmbedUrl('https://movix1.embedseek.com/#ug3i');
+          setEmbedType('custom');
+          currentSourceRef.current = 'custom';
+          setOnlyVostfrAvailable(false);
+        }
+      }
+ else if (finalFileSources.length > 0) {
+        console.log('✅ Selecting NEXUS FILE as primary source');
+        setSelectedSource('nexus_file');
+        setSelectedNexusFileSource(0);
+        setVideoSource(finalFileSources[0].url);
+        currentSourceRef.current = 'nexus_file';
+        setOnlyVostfrAvailable(false);
+      }
+      // Then try mp4 sources
+      else if (fetchedMp4Sources.length > 0) {
+        setSelectedSource('mp4');
+        setSelectedMp4Source(0);
+        setVideoSource(fetchedMp4Sources[0].url);
+        currentSourceRef.current = 'mp4';
+      }
+      // Then select Darkino if available
+      else if (darkinoResult && typeof darkinoResult === 'object' && 'available' in darkinoResult && darkinoResult.available && darkinoResult.sources.length > 0) {
+        setSelectedSource('darkino');
+        setSelectedDarkinoSource(0);
+        setVideoSource(darkinoResult.sources[0].m3u8);
+        currentSourceRef.current = 'darkino';
+      }
+      // Then try FStream sources (only if fsvid sources are available for VIP users)
+      else if (fstreamProcessedSources.length > 0) {
+        // Fallback final vers les sources FStream régulières
+        console.log('✅ Selecting FSTREAM as fallback source');
+        setSelectedSource('fstream');
+        setSelectedFstreamSource(0);
+        setEmbedUrl(getProxyUrl(fstreamProcessedSources[0].url));
+        setEmbedType('fstream');
+        currentSourceRef.current = 'fstream';
+        setOnlyVostfrAvailable(false);
+      }
+      // Fallback order: Supervideo (Omega), Multi (Coflix), FStream (non-VIP), Frembed, Movix (custom)
+      else {
+        // Try Supervideo from Omega
+        const supervideo = omegaResult ? getSupervideoFromOmega(omegaResult) : null;
+        if (supervideo && omegaResult) {
+          setSelectedSource('omega');
+          setSelectedOmegaPlayer(omegaResult.player_links.findIndex((p: { player: string; link: string; is_hd: boolean; label?: string }) => p === supervideo));
+          setEmbedUrl(supervideo.link);
+          setEmbedType('omega');
+          currentSourceRef.current = 'omega';
+        } else if (wiflixProcessedSources.length > 0) {
+          console.log('✅ Selecting WIFLIX/LYNX as fallback source');
+          setSelectedSource('wiflix');
+          setSelectedWiflixSource(0);
+          setEmbedUrl(wiflixProcessedSources[0].url);
+          setEmbedType('wiflix');
+          currentSourceRef.current = 'wiflix';
+          setOnlyVostfrAvailable(false);
+        } else {
+          // Try Multi from Coflix
+          const multi = coflixResult ? getMultiFromCoflix(coflixResult) : null;
+          if (multi && coflixResult) {
+            setSelectedSource('coflix');
+            setSelectedPlayerLink(coflixResult.player_links.findIndex((p: { decoded_url: string; clone_url?: string; quality: string; language: string }) => p === multi));
+            setEmbedUrl(getCoflixPreferredUrl(multi));
+            setEmbedType('coflix');
+            currentSourceRef.current = 'coflix';
+          }
+          // Try FStream sources (dans le fallback, on peut utiliser toutes les sources)
+          else if (fstreamProcessedSources.length > 0) {
+            console.log('✅ Selecting FSTREAM as fallback source (no fsvid)');
+            setSelectedSource('fstream');
+            setSelectedFstreamSource(0);
+            setEmbedUrl(getProxyUrl(fstreamProcessedSources[0].url));
+            setEmbedType('fstream');
+            currentSourceRef.current = 'fstream';
+            setOnlyVostfrAvailable(false);
+          }
+          else if (isFrembedAvailable) {
+            setSelectedSource('frembed');
+            setVideoSource(`https://frembed.bond/api/film.php?id=${id}`);
+            setEmbedUrl(`https://frembed.bond/api/film.php?id=${id}`);
+            setEmbedType('frembed');
+            currentSourceRef.current = 'frembed';
+          } else if (customLinks.length > 0) {
+            setSelectedSource('custom');
+            setEmbedUrl(customLinks[0]);
+            setEmbedType('custom');
+            currentSourceRef.current = 'custom';
+          } else {
+            setSelectedSource('vostfr');
+            setOnlyVostfrAvailable(true);
+            setLoadingError(false);
+          }
+        }
+      }
+
+      // Fetch next movie after sources to avoid dependency issues
+      try {
+        await fetchNextMovie();
+      } catch (error) {
+        console.error('Error fetching next movie:', error);
+      }
+
+      // setIsLoading(false); // This will be handled by the useEffect watching individual loading states
+    } catch (error) {
+      console.error('Error in fetchVideoSources:', error);
+
+      // Default to VOSTFR when no sources are available
+      setSelectedSource('vostfr');
+      setOnlyVostfrAvailable(true);
+      setLoadingError(false);
+
+      // Make sure to set all loading states to false in case of a top-level error
+      setLoadingCoflix(false);
+      setLoadingOmega(false);
+      setLoadingDarkino(false);
+      setLoadingFrembed(false);
+
+      setLoadingFstream(false);
+      setLoadingExtractions(false);
+      setIsLoading(false);
+    }
+  };
+
+  // Function to fetch next movie recommendation
+  const fetchNextMovie = useCallback(async () => {
+    if (!id) return;
+
+    try {
+      setLoadingNextMovie(true);
+      const response = await axios.get(
+        `https://api.themoviedb.org/3/movie/${id}/recommendations`,
+        {
+          params: {
+            api_key: TMDB_API_KEY,
+            language: getTmdbLanguage(),
+            page: 1
+          }
+        }
+      );
+
+      if (response.data.results && response.data.results.length > 0) {
+        // Ne plus vérifier la disponibilité sur frembed, prendre directement le premier film recommandé
+        const firstRecommendation = response.data.results[0];
+        setNextMovie({
+          id: firstRecommendation.id,
+          title: firstRecommendation.title,
+          overview: firstRecommendation.overview,
+          release_date: firstRecommendation.release_date,
+          vote_average: firstRecommendation.vote_average,
+          poster_path: firstRecommendation.poster_path,
+          runtime: 0 // Default value
+        });
+      }
+    } catch (error) {
+    } finally {
+      setLoadingNextMovie(false);
+    }
+  }, [id]);
+
+
+  // Function to fetch Rivestream VO/VOSTFR HLS sources
+  const fetchRivestreamSources = useCallback(async () => {
+    // Vérifier si Rivestream est disponible (VIP check si activé)
+    if (!isRivestreamAvailable()) {
+      console.log('🚫 Rivestream sources are only available for VIP users');
+      setLoadingRivestream(false);
+      return;
+    }
+
+    if (!id || rivestreamLoaded) return;
+
+    console.log('🎬 Starting Rivestream VO/VOSTFR HLS source fetch for movie:', id);
+    isLoadingRivestreamRef.current = true; // Marquer le début du chargement
+    setLoadingRivestream(true);
+    setRivestreamLoaded(true);
+
+    const services = [
+      'flowcast',
+      'asiacloud',
+      'humpy',
+      'primevids',
+      'shadow',
+      'hindicast',
+      'animez',
+      'aqua',
+      'yggdrasil',
+      'putafilme',
+      'ophim'
+    ];
+
+    // Fonction pour traiter chaque service et retourner les sources et captions
+    const fetchService = async (service: string): Promise<{
+      sources: { url: string; label: string; quality: number; service: string; category: string }[];
+      captions: { label: string; file: string }[];
+    }> => {
+      try {
+        // Générer un secretKey dynamique basé sur l'ID du film
+        const secretKey = generateRivestreamSecretKey(id);
+        const url = buildProxyUrl(`https://rivestream.org/api/backendfetch?requestID=movieVideoProvider&id=${id}&service=${service}&secretKey=${secretKey}&proxyMode=noProxy`);
+        console.log(`🔍 Fetching Rivestream service: ${service} with secretKey: ${secretKey}`);
+
+        const response = await axios.get<RivestreamResponse>(url, { timeout: 10000 });
+
+        if (response.data?.data?.sources && response.data.data.sources.length > 0) {
+          const sources = response.data.data.sources
+            .map(source => {
+              // Remplacer le domaine si c'est un proxy Rivestream (détecté par le pattern proxy?url=)
+              let url = source.url;
+              if (url.includes('/proxy?url=')) {
+                try {
+                  const urlObj = new URL(url);
+                  urlObj.host = RIVESTREAM_PROXIES[0];
+                  url = urlObj.toString();
+                } catch (e) {
+                  url = url.replace(/^(https?:\/\/)[^\/]+/, `$1${RIVESTREAM_PROXIES[0]}`);
+                }
+              }
+
+              const mappedSource = {
+                url: url,
+                label: typeof source.quality === 'number' ? `${source.quality}p` : source.quality,
+                quality: typeof source.quality === 'number' ? source.quality : 720,
+                service: source.source,
+                category: service.toLowerCase() // Catégorie en minuscules pour correspondre au categoryOrder
+              };
+              return mappedSource;
+            });
+
+          // Collecter les captions si disponibles et les proxifier
+          const captions = response.data.data.captions?.map(caption => ({
+            label: caption.label,
+            file: buildProxyUrl(caption.file) // Proxifier l'URL pour contourner CORS
+          })) || [];
+
+          if (sources.length > 0) {
+            console.log(`✅ Found ${sources.length} sources from ${service}:`, sources);
+            if (captions.length > 0) {
+              console.log(`📝 Found ${captions.length} captions from ${service}:`, captions);
+            }
+            return { sources, captions };
+          }
+        }
+        return { sources: [], captions: [] };
+      } catch (error) {
+        console.error(`❌ Error fetching Rivestream service ${service}:`, error);
+        return { sources: [], captions: [] };
+      }
+    };
+
+    // Lancer toutes les requêtes en parallèle et collecter tous les résultats
+    try {
+      const allResults = await Promise.all(services.map(service => fetchService(service)));
+
+      // Fusionner toutes les sources
+      const collectedSources = allResults.flatMap(result => result.sources);
+
+      // Fusionner toutes les captions et dédupliquer
+      const allCaptions = allResults.flatMap(result => result.captions);
+
+      // Dédupliquer les captions par label (garder la première occurrence)
+      const uniqueCaptions = allCaptions.filter((caption, index, self) =>
+        index === self.findIndex(c => c.label === caption.label)
+      );
+
+      // Trier les captions : Français en premier, puis alphabétique
+      const sortedCaptions = uniqueCaptions.sort((a, b) => {
+        const aIsFrench = a.label.toLowerCase().includes('français') || a.label.toLowerCase().includes('french');
+        const bIsFrench = b.label.toLowerCase().includes('français') || b.label.toLowerCase().includes('french');
+
+        if (aIsFrench && !bIsFrench) return -1;
+        if (!aIsFrench && bIsFrench) return 1;
+        return a.label.localeCompare(b.label);
+      });
+
+      if (collectedSources.length === 0) {
+        console.log('⚠️ No Rivestream sources found for this movie');
+      } else {
+        // Trier par qualité (meilleure qualité en premier)
+        const sortedSources = collectedSources.sort((a, b) => b.quality - a.quality);
+        setRivestreamSources(sortedSources);
+        console.log(`✅ Total Rivestream sources collected: ${sortedSources.length}`, sortedSources);
+      }
+
+      if (sortedCaptions.length > 0) {
+        setRivestreamCaptions(sortedCaptions);
+        console.log(`✅ Total Rivestream captions collected: ${sortedCaptions.length}`, sortedCaptions);
+      }
+    } finally {
+      setLoadingRivestream(false);
+      isLoadingRivestreamRef.current = false; // Marquer la fin du chargement
+    }
+  }, [id, rivestreamLoaded]);
+
+  // Function to handle next movie navigation
+  const handleNextMovie = async (movieId: number) => {
+    window.location.href = `/watch/movie/${movieId}`;
+  };
+
+  // Function to load VO/VOSTFR player when user chooses to
+  const handleLoadVostfr = useCallback(() => {
+    setShowEmbedQuality(true); // Show sources menu only, keep "onlyVostfrAvailable" true for now
+  }, [setShowEmbedQuality]);
+
+  // Listener pour l'événement showSourcesMenu (déclenché par HLSPlayer en cas d'erreur 403)
+  useEffect(() => {
+    const handleShowSourcesMenu = () => {
+      setShowEmbedQuality(true);
+    };
+    window.addEventListener('showSourcesMenu', handleShowSourcesMenu);
+    return () => {
+      window.removeEventListener('showSourcesMenu', handleShowSourcesMenu);
+    };
+  }, []);
+
+  // Progress saving functionality removed
+
+  useEffect(() => {
+    // Renamed inner function to avoid confusion with any other handleSourceChange
+    const processSourceSelectionFromMenu = (event: CustomEvent) => {
+      const { type: rawType, url, id: eventId } = event.detail;
+
+      const type = typeof rawType === 'number' ? String(rawType) : rawType;
+
+      // When any source is picked from the menu, hide the "no content" message and the menu itself.
+      // Exception: ne pas fermer le menu pour rivestream_hls car c'est juste un déclencheur de chargement
+      // OU si on est en train de charger les sources Rivestream
+      setOnlyVostfrAvailable(false);
+      if (type !== 'rivestream_hls' && !isLoadingRivestreamRef.current) {
+        setShowEmbedQuality(false);
+      }
+
+      // Handle HLS source selections
+      if (type === 'darkino' || type === 'mp4' || type === 'nexus_hls' || type === 'nexus_file' || type === 'rivestream_hls' || type === 'rivestream' || type === 'bravo') {
+        // Ne pas cacher l'iframe si c'est juste le déclencheur de chargement Rivestream
+        if (type !== 'rivestream_hls') {
+          setEmbedUrl(null); // Hide iframe
+          setEmbedType(null);
+        }
+        currentSourceRef.current = type === 'rivestream' ? 'rivestream_hls' : type; // type is one of 'darkino', 'mp4', 'nexus_hls', 'nexus_file', 'rivestream_hls', 'rivestream'
+
+        if (type === 'darkino') {
+          const index = darkinoSources.findIndex(s => s.m3u8 === url);
+          if (index !== -1) {
+            setSelectedDarkinoSource(index);
+            setSelectedSource('darkino');
+          } else if (darkinoSources.length > 0) { // Fallback to first darkino if specific URL not found
+            setSelectedDarkinoSource(0);
+            setSelectedSource('darkino');
+          }
+        } else if (type === 'mp4') {
+          // Extract index from event id (e.g. 'mp4_3' -> 3)
+          const mp4Index = typeof eventId === 'string' ? parseInt(eventId.split('_')[1], 10) : -1;
+
+          const index = mp4Sources.findIndex(s => s.url === url);
+          if (index !== -1) {
+            setSelectedMp4Source(index);
+            setSelectedSource('mp4');
+            setVideoSource(mp4Sources[index].url);
+          } else if (mp4Sources.length > 0) { // Fallback to first mp4
+            setSelectedMp4Source(0);
+            setSelectedSource('mp4');
+            setVideoSource(mp4Sources[0].url);
+          }
+        } else if (type === 'nexus_hls') {
+          const index = nexusHlsSources.findIndex(s => s.url === url);
+          if (index !== -1) {
+            setSelectedNexusHlsSource(index);
+            setSelectedSource('nexus_hls');
+            setVideoSource(nexusHlsSources[index].url);
+          } else if (nexusHlsSources.length > 0) { // Fallback to first nexus hls
+            setSelectedNexusHlsSource(0);
+            setSelectedSource('nexus_hls');
+            setVideoSource(nexusHlsSources[0].url);
+          }
+        } else if (type === 'nexus_file') {
+          const index = nexusFileSources.findIndex(s => s.url === url);
+          if (index !== -1) {
+            setSelectedNexusFileSource(index);
+            setSelectedSource('nexus_file');
+            setVideoSource(nexusFileSources[index].url);
+          } else if (nexusFileSources.length > 0) { // Fallback to first nexus file
+            setSelectedNexusFileSource(0);
+            setSelectedSource('nexus_file');
+            setVideoSource(nexusFileSources[0].url);
+          }
+        } else if (type === 'rivestream_hls' && event.detail.id === 'rivestream_retry') {
+          // CAS PRIORITAIRE: retry avec un nouveau proxy - utiliser directement l'URL fournie
+          console.log('🔄 [WatchMovie] Rivestream proxy retry with new URL:', url);
+          setSelectedSource('rivestream_hls');
+          setVideoSource(url);
+          setEmbedUrl(null);
+          setEmbedType(null);
+        } else if (type === 'rivestream_hls') {
+          // Vérifier si Rivestream est disponible (VIP check si activé)
+          if (!isRivestreamAvailable()) {
+            console.log('🚫 Rivestream sources are only available for VIP users');
+            return;
+          }
+
+          console.log('🎬 [WatchMovie] Rivestream button clicked!', { rivestreamLoaded, loadingRivestream, sourcesCount: rivestreamSources.length });
+
+          // Charger les sources Rivestream si pas en cours de chargement
+          if (!loadingRivestream) {
+            // Si aucune source n'est disponible, (re)lancer le chargement
+            if (rivestreamSources.length === 0) {
+              console.log('🚀 [WatchMovie] Starting Rivestream fetch...');
+              // Réinitialiser rivestreamLoaded pour permettre un nouveau chargement
+              setRivestreamLoaded(false);
+              fetchRivestreamSources();
+            } else {
+              // Des sources sont déjà disponibles, sélectionner une source
+              console.log('✅ [WatchMovie] Rivestream sources already loaded, selecting source');
+              const index = rivestreamSources.findIndex(s => s.url === url);
+              if (index !== -1) {
+                setSelectedRivestreamSource(index);
+                setSelectedSource('rivestream_hls');
+                setVideoSource(rivestreamSources[index].url);
+              } else {
+                // Fallback to first rivestream
+                setSelectedRivestreamSource(0);
+                setSelectedSource('rivestream_hls');
+                setVideoSource(rivestreamSources[0].url);
+              }
+            }
+          } else {
+            console.log('⏳ [WatchMovie] Rivestream is already loading...');
+          }
+        } else if (type === 'rivestream') {
+          // Sélection d'une source Rivestream spécifique depuis le menu déroulant
+          console.log('🎬 [WatchMovie] Rivestream individual source selected:', url);
+          const index = rivestreamSources.findIndex(s => s.url === url);
+          if (index !== -1) {
+            setSelectedRivestreamSource(index);
+            setSelectedSource('rivestream_hls');
+            setVideoSource(rivestreamSources[index].url);
+            console.log(`✅ [WatchMovie] Playing Rivestream source #${index}: ${rivestreamSources[index].label}`);
+          } else {
+            console.log('⚠️ [WatchMovie] Rivestream source not found, falling back to first source');
+            if (rivestreamSources.length > 0) {
+              setSelectedRivestreamSource(0);
+              setSelectedSource('rivestream_hls');
+              setVideoSource(rivestreamSources[0].url);
+            }
+          }
+        } else if (type === 'bravo') {
+          // Sélection d'une source Bravo (PurStream) depuis le menu déroulant
+          console.log('🎬 [WatchMovie] Bravo source selected:', url);
+          const index = purstreamSources.findIndex(s => s.url === url);
+          if (index !== -1) {
+            setSelectedSource('bravo');
+            setVideoSource(purstreamSources[index].url);
+            console.log(`✅ [WatchMovie] Playing Bravo source #${index}: ${purstreamSources[index].label}`);
+          } else if (purstreamSources.length > 0) {
+            setSelectedSource('bravo');
+            setVideoSource(purstreamSources[0].url);
+          }
+        }
+      }
+      // Handle Embed source selections
+      else if (['frembed', 'custom', 'vostfr', 'omega', 'coflix', 'fstream', 'wiflix', 'viper'].includes(type)) {
+        let finalEmbedUrl = url;
+        if (type === 'fstream') {
+          finalEmbedUrl = getProxyUrl(url);
+        }
+        setEmbedUrl(finalEmbedUrl);
+        setEmbedType(type);
+        setSelectedSource(type as PlayerSourceType); // Type assertion, as 'type' is a confirmed string literal
+        setVideoSource(null); // Explicitly clear HLS video source
+        currentSourceRef.current = type; // 'type' is a string here from the includes check
+
+        // Handle FStream source selection
+        if (type === 'fstream') {
+          const index = fstreamSources.findIndex(s => s.url === url);
+          if (index !== -1) {
+            setSelectedFstreamSource(index);
+          } else if (fstreamSources.length > 0) {
+            setSelectedFstreamSource(0);
+            setEmbedUrl(getProxyUrl(fstreamSources[0].url));
+          }
+        }
+        // Handle Wiflix source selection
+        else if (type === 'wiflix') {
+          const index = wiflixSources.findIndex(s => s.url === url);
+          if (index !== -1) {
+            setSelectedWiflixSource(index);
+          } else if (wiflixSources.length > 0) {
+            setSelectedWiflixSource(0);
+            setEmbedUrl(wiflixSources[0].url);
+          }
+        }
+        // Handle Viper source selection
+        else if (type === 'viper') {
+          const index = viperSources.findIndex(s => s.url === url);
+          if (index !== -1) {
+            setSelectedViperSource(index);
+            console.log(`✅ [WatchMovie] Playing Viper source #${index}: ${viperSources[index].label}`);
+          } else if (viperSources.length > 0) {
+            setSelectedViperSource(0);
+            setEmbedUrl(viperSources[0].url);
+          }
+        }
+      }
+      // Handle dropdown toggles (no state change needed here for player, currentSourceRef remains)
+      else if (typeof type === 'string' && type.endsWith('_main')) {
+        // console.log(`[WatchMovie] Dropdown toggle ignored for player state: ${type}`);
+      }
+      // Handle unknown types (currentSourceRef remains unchanged or could be set to a default/null string if necessary)
+      else {
+        // console.warn(`[WatchMovie] Unknown source type received for player state: ${type}`);
+      }
+    };
+
+    window.addEventListener('sourceChange', processSourceSelectionFromMenu as EventListener);
+    return () => {
+      window.removeEventListener('sourceChange', processSourceSelectionFromMenu as EventListener);
+    };
+  }, [
+    // State values used in logic
+    darkinoSources, mp4Sources, darkinoAvailable, nexusHlsSources, nexusFileSources, fstreamSources, wiflixSources, viperSources, rivestreamSources, rivestreamLoaded, loadingRivestream,
+    // State setters
+    setOnlyVostfrAvailable, setShowEmbedQuality, setEmbedUrl, setEmbedType,
+    setSelectedSource, setSelectedDarkinoSource, setSelectedMp4Source, setSelectedNexusHlsSource, setSelectedNexusFileSource, setSelectedFstreamSource, setSelectedWiflixSource, setSelectedViperSource, setSelectedRivestreamSource, setVideoSource,
+    // Functions
+    fetchRivestreamSources,
+    // Refs (currentSourceRef.current is mutated, so the ref object itself is a dependency)
+    currentSourceRef, isLoadingRivestreamRef
+  ]);
+
+  useEffect(() => {
+    // On ne fait rien si VIP activé
+    if (import.meta.env.is_vip === 'true' || import.meta.env.is_vip === true || localStorage.getItem('is_vip') === 'true') {
+      console.log('🚫 VIP activé - popup ads désactivé');
+      return;
+    }
+    // On ne fait rien si déjà passé le popup ou si popup déjà affiché
+    if (adPopupTriggered || adPopupBypass) {
+      console.log('🚫 Popup déjà déclenché ou bypassé:', { adPopupTriggered, adPopupBypass });
+      return;
+    }
+
+    console.log('🔍 États de chargement:', {
+      loadingDarkino,
+      loadingCoflix,
+      loadingOmega,
+      loadingFrembed,
+      loadingFstream,
+      loadingExtractions
+    });
+
+    // Quand tous les chargements sont terminés (y compris les extractions)
+    if (!loadingDarkino && !loadingCoflix && !loadingOmega && !loadingFrembed && !loadingFstream && !loadingExtractions) {
+      console.log('✅ Tous les chargements terminés - vérification des sources pour popup ads');
+      console.log('📊 Sources disponibles:', {
+        selectedSource,
+        nexusHlsSources: nexusHlsSources.length,
+        nexusFileSources: nexusFileSources.length,
+        darkinoSources: darkinoSources.length,
+        mp4Sources: mp4Sources.length,
+        omegaData: omegaData?.player_links?.length || 0,
+        coflixData: coflixData?.player_links?.length || 0,
+        fstreamSources: fstreamSources.length,
+        wiflixSources: wiflixSources.length,
+        embedUrl
+      });
+
+      // NOUVEAU: Déclencher le popup pour TOUS les lecteurs dès qu'une source est sélectionnée
+      if (selectedSource && !adPopupTriggered) {
+        console.log('🎭 Déclenchement popup pour source:', selectedSource);
+
+        // Vérifier s'il n'y a que des sources VO/VOSTFR disponibles
+        const hasVfSources = darkinoSources.length > 0 || mp4Sources.length > 0 ||
+          (omegaData?.player_links && omegaData.player_links.length > 0) ||
+          (coflixData?.player_links && coflixData.player_links.length > 0) ||
+          (fstreamSources.length > 0 && fstreamSources.some(source =>
+            source.category === 'VF' || source.category === 'VFQ'
+          )) ||
+          (wiflixSources.length > 0 && wiflixSources.some(source =>
+            source.category === 'VF' || source.category === 'VFQ'
+          )) ||
+          (viperSources.length > 0 && viperSources.some(source =>
+            source.language === 'VF'
+          ));
+
+        const isVoVostfrOnly = !hasVfSources;
+
+        // Déclencher le popup avec le type de lecteur approprié
+        let playerType = selectedSource;
+        let additionalInfo: any = { isVoVostfrOnly };
+
+        // Mapper les types de sources aux types de lecteurs pour le popup
+        switch (selectedSource) {
+          case 'nexus_hls':
+          case 'nexus_file':
+            playerType = 'nexus_' + selectedSource.split('_')[1];
+            break;
+          case 'darkino':
+          case 'mp4':
+            playerType = 'darkino';
+            break;
+          case 'omega':
+            playerType = 'omega';
+            additionalInfo = { omegaData, isVoVostfrOnly };
+            break;
+          case 'coflix':
+            playerType = 'multi';
+            additionalInfo = { coflixData, isVoVostfrOnly };
+            break;
+          case 'fstream':
+            playerType = 'fstream';
+            break;
+          case 'wiflix':
+            playerType = 'wiflix';
+            break;
+          case 'viper':
+            playerType = 'viper';
+            break;
+          case 'frembed':
+            playerType = 'frembed';
+            break;
+          default:
+            // Pour les autres types (custom, embed URLs, etc.)
+            if (embedUrl) {
+              if (embedUrl.toLowerCase().includes('vidmoly')) {
+                playerType = 'vidmoly';
+              } else if (embedUrl.toLowerCase().includes('dropload')) {
+                playerType = 'dropload';
+              } else {
+                playerType = 'adfree'; // Type générique pour les embeds
+              }
+            } else {
+              playerType = 'adfree'; // Type par défaut
+            }
+            break;
+        }
+
+        console.log(`🎭 Popup déclenché pour ${playerType} (source: ${selectedSource})`);
+        showPopupForPlayer(String(playerType), additionalInfo);
+        setAdPopupTriggered(true);
+        return;
+      }
+
+      console.log('⚠️ Aucune source sélectionnée ou popup déjà déclenché');
+    } else {
+      console.log('⏳ Chargements en cours - popup ads en attente');
+    }
+  }, [loadingDarkino, loadingCoflix, loadingOmega, loadingFrembed, loadingFstream, loadingWiflix, loadingExtractions, selectedSource, darkinoSources, mp4Sources, omegaData, coflixData, fstreamSources, wiflixSources, embedUrl, adPopupTriggered, adPopupBypass, showPopupForPlayer]);
+
+  // Si on ferme le popup (croix) ET qu'on n'a PAS cliqué sur la pub, on bloque l'accès au lecteur
+  useEffect(() => {
+    if (!showAdFreePopup && adPopupTriggered && !shouldLoadIframe && !hasClickedAd) {
+      setAdPopupBypass(true); // On bloque l'accès au lecteur
+    }
+  }, [showAdFreePopup, adPopupTriggered, shouldLoadIframe, hasClickedAd]);
+
+  useEffect(() => {
+    const setVh = () => {
+      document.documentElement.style.setProperty('--vh', `${window.innerHeight * 0.01}px`);
+    };
+    setVh();
+    window.addEventListener('resize', setVh);
+    return () => window.removeEventListener('resize', setVh);
+  }, []);
+
+  useEffect(() => {
+    document.body.style.overflow = 'hidden';
+    document.body.style.height = '100vh';
+    document.documentElement.style.overflow = 'hidden';
+    document.documentElement.style.height = '100vh';
+    return () => {
+      document.body.style.overflow = '';
+      document.body.style.height = '';
+      document.documentElement.style.overflow = '';
+      document.documentElement.style.height = '';
+    };
+  }, []);
+
+  // Age restriction blocking screen
+  if (isBlocked) {
+    return (
+      <div className="min-h-screen bg-gradient-to-b from-gray-900 to-black flex items-center justify-center px-4">
+        <div className="text-center max-w-md">
+          <div className="w-20 h-20 bg-red-600/20 rounded-full flex items-center justify-center mx-auto mb-6">
+            <svg className="w-10 h-10 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+            </svg>
+          </div>
+          <h2 className="text-2xl font-bold text-white mb-3">{t('details.contentBlocked')}</h2>
+          <p className="text-gray-400 mb-6">
+            {t('details.contentBlockedDesc', { rating: getClassificationLabel(contentCert, t), age: currentProfile?.ageRestriction ?? 0 })}
+          </p>
+          <button
+            onClick={() => navigate(-1)}
+            className="px-6 py-3 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors font-medium"
+          >
+            {t('details.goBack')}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const preMidSourceDetail = (() => {
+    switch (selectedSource) {
+      case 'darkino': {
+        const source = darkinoSources[selectedDarkinoSource];
+        return formatPremidSourceDetail(
+          source?.label || source?.quality || (darkinoSources.length > 0 ? `Source ${selectedDarkinoSource + 1}` : undefined),
+          source?.language,
+        );
+      }
+      case 'nexus_hls': {
+        const source = nexusHlsSources[selectedNexusHlsSource];
+        return formatPremidSourceDetail(
+          source?.label || (source ? `Source ${selectedNexusHlsSource + 1}` : undefined),
+        );
+      }
+      case 'nexus_file': {
+        const source = nexusFileSources[selectedNexusFileSource];
+        return formatPremidSourceDetail(
+          source?.label || (source ? `Source ${selectedNexusFileSource + 1}` : undefined),
+        );
+      }
+      case 'mp4': {
+        const source =
+          mp4Sources.find(entry => entry.url === videoSource) ||
+          mp4Sources[selectedMp4Source];
+        return formatPremidSourceDetail(
+          source?.label || (source ? `Source ${selectedMp4Source + 1}` : undefined),
+          source?.language,
+          source?.isVip ? 'VIP' : undefined,
+        );
+      }
+      case 'fstream': {
+        const source =
+          fstreamSources.find(entry => entry.url === embedUrl) ||
+          fstreamSources[selectedFstreamSource];
+        return formatPremidSourceDetail(source?.label, source?.category);
+      }
+      case 'wiflix': {
+        const source =
+          wiflixSources.find(entry => entry.url === embedUrl) ||
+          wiflixSources[selectedWiflixSource];
+        return formatPremidSourceDetail(source?.label, source?.category);
+      }
+      case 'viper': {
+        const source =
+          viperSources.find(entry => entry.url === embedUrl) ||
+          viperSources[selectedViperSource];
+        return formatPremidSourceDetail(
+          source?.label,
+          source?.quality,
+          source?.language,
+        );
+      }
+      case 'rivestream':
+      case 'rivestream_hls': {
+        const source =
+          rivestreamSources.find(entry => entry.url === videoSource) ||
+          rivestreamSources[selectedRivestreamSource];
+        return formatPremidSourceDetail(source?.label, source?.service);
+      }
+      case 'bravo': {
+        const source =
+          purstreamSources.find(entry => entry.url === videoSource) ||
+          purstreamSources[0];
+        return formatPremidSourceDetail(source?.label);
+      }
+      default:
+        return undefined;
+    }
+  })();
+
+  return (
+    <div style={{ minHeight: 'calc(var(--vh, 1vh) * 100)', overflow: 'hidden' }} className="w-full bg-black overflow-hidden fixed inset-0">
+      <style dangerouslySetInnerHTML={{
+        __html: `
+          .loading-container {
+            --uib-size: 35px;
+            --uib-color: white;
+            --uib-speed: 1s;
+            --uib-stroke: 3.5px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            width: var(--uib-size);
+            height: calc(var(--uib-size) * 0.9);
+          }
+
+          .loading-bar {
+            width: var(--uib-stroke);
+            height: 100%;
+            background-color: var(--uib-color);
+            border-radius: calc(var(--uib-stroke) / 2);
+            transition: background-color 0.3s ease;
+          }
+
+          .loading-bar:nth-child(1) {
+            animation: grow var(--uib-speed) ease-in-out calc(var(--uib-speed) * -0.45) infinite;
+          }
+
+          .loading-bar:nth-child(2) {
+            animation: grow var(--uib-speed) ease-in-out calc(var(--uib-speed) * -0.3) infinite;
+          }
+
+          .loading-bar:nth-child(3) {
+            animation: grow var(--uib-speed) ease-in-out calc(var(--uib-speed) * -0.15) infinite;
+          }
+
+          .loading-bar:nth-child(4) {
+            animation: grow var(--uib-speed) ease-in-out infinite;
+          }
+
+          @keyframes grow {
+            0%, 100% {
+              transform: scaleY(0.3);
+            }
+            50% {
+              transform: scaleY(1);
+            }
+          }
+        `
+      }} />
+      <div
+        hidden
+        data-premid-watch-context=""
+        data-premid-title={movieTitle || undefined}
+        data-premid-media-type="movie"
+        data-premid-source-label={embedType || selectedSource || undefined}
+        data-premid-source-detail={preMidSourceDetail}
+      />
+      {isLoading ? (
+        <div className="flex flex-col items-center justify-center h-full bg-black">
+          <div className="loading-container">
+            <div className="loading-bar"></div>
+            <div className="loading-bar"></div>
+            <div className="loading-bar"></div>
+            <div className="loading-bar"></div>
+          </div>
+          <div className="text-white text-xl font-medium mt-6">{loadingText}</div>
+        </div>
+      ) : showAdFreePopup && adPopupTriggered && !adPopupBypass ? (
+        <AdFreePlayerAds onClose={handlePopupClose} onAccept={handlePopupAccept} adType={adType} onAdClick={() => setHasClickedAd(true)} />
+      ) : adPopupBypass ? (
+        <div className="flex flex-col items-center justify-center h-full bg-black">
+          <div className="text-white text-2xl font-bold mb-4">{t('watch.mustWatchAd')}</div>
+          <div className="text-gray-400 text-lg">{t('watch.reloadToRetry')}</div>
+        </div>
+      ) : adPopupTriggered && !shouldLoadIframe && !hasClickedAd ? (
+        <div className="flex flex-col items-center justify-center h-full bg-black">
+          <div className="text-white text-2xl font-bold mb-4">{t('watch.loading')}</div>
+          <div className="text-gray-400 text-lg">{t('watch.pleaseWait')}</div>
+        </div>
+      ) : onlyVostfrAvailable ? (
+        <div className="h-full bg-black text-white flex flex-col items-center justify-center p-4">
+          <div className="max-w-2xl w-full bg-gray-900/80 backdrop-blur-md rounded-xl p-8 text-center shadow-2xl border border-gray-800 relative">
+            <div className="mb-6">
+              <svg xmlns="http://www.w3.org/2000/svg" className="mx-auto h-16 w-16 text-yellow-500 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+              <h2 className="text-2xl font-bold text-white mb-2">{t('watch.contentNotFoundInSources')}</h2>
+              <p className="text-gray-300 mb-6">
+                {t('watch.movieNotFoundDesc')}
+              </p>
+              <p className="text-yellow-400 mb-6">
+                <strong>{t('watch.importantInfo')}</strong> {t('watch.vostfrWarning')}
+              </p>
+              <div className="flex justify-center gap-4">
+                <button
+                  onClick={() => navigate(`/movie/${id}`)}
+                  className="px-6 py-3 bg-gray-800 hover:bg-gray-700 text-white rounded-lg transition-all duration-200 shadow-lg"
+                >
+                  {t('watch.back')}
+                </button>
+                <button
+                  onClick={() => { setShowEmbedQuality(true); setOnlyVostfrAvailable(true); }}
+                  className="px-6 py-3 bg-red-800 hover:bg-red-700 text-white rounded-lg transition-all duration-200 shadow-lg"
+                >
+                  {t('watch.chooseVostfrPlayer')}
+                </button>
+              </div>
+            </div>
+          </div>
+          {/* Sources Menu Overlay */}
+          <AnimatePresence>
+            {showEmbedQuality && (
+              <motion.div
+                key="embed-quality-menu"
+                initial={{ opacity: 0, x: 300 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: 300 }}
+                transition={{ duration: 0.3, ease: 'easeOut' }}
+                className="fixed inset-0 z-[10000] bg-black/50 flex justify-end pointer-events-auto"
+              >
+                <div className="bg-black/95 backdrop-blur-lg border-l border-gray-800 shadow-2xl w-full max-w-md h-full overflow-y-auto z-[10000]">
+                  <div className="flex justify-between items-center p-4 border-b border-gray-700/60 sticky top-0 bg-black/95 z-10">
+                    <h3 className="text-white text-lg font-bold">{t('watch.changeSource')}</h3>
+                    <button
+                      onClick={() => setShowEmbedQuality(false)}
+                      className="text-gray-400 hover:text-red-500 transition-colors text-2xl font-bold focus:outline-none"
+                    >
+                      ×
+                    </button>
+                  </div>
+                  <div className="p-4">
+                    <HLSPlayer
+                      src={''}
+                      className="hidden"
+                      movieId={id || undefined}
+                      controls={false}
+                      nexusHlsSources={nexusHlsSources}
+                      nexusFileSources={nexusFileSources}
+                      rivestreamSources={isRivestreamAvailable() ? rivestreamSources : []}
+                      rivestreamCaptions={isRivestreamAvailable() ? rivestreamCaptions : []}
+                      loadingRivestream={isRivestreamAvailable() ? loadingRivestream : false}
+                      purstreamSources={purstreamSources}
+                      darkinoSources={darkinoSources}
+                      mp4Sources={mp4Sources}
+                      frembedAvailable={frembedAvailable}
+                      customSources={customSources}
+                      omegaSources={omegaData?.player_links || []}
+                      coflixSources={coflixData?.player_links || []}
+                      fstreamSources={fstreamSources}
+                      wiflixSources={wiflixSources}
+                      viperSources={viperSources}
+
+                      autoPlay={false}
+                      onlyQualityMenu={true}
+                      embedType={embedType || undefined}
+                      embedUrl={embedUrl || undefined}
+                      title={movieTitle}
+                      initialTime={watchProgress}
+                    />
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      ) : selectedSource === 'fstream' && fstreamSources.length > 0 && (!adPopupTriggered || shouldLoadIframe || hasClickedAd) ? (
+        <div className="w-full h-full flex items-center justify-center">
+          {/* Back to Info Button */}
+          <button
+            onClick={() => navigate(`/movie/${id}`)}
+            className="fixed top-6 left-8 z-[9999] flex items-center gap-2 px-3 py-2 rounded-lg bg-black/70 hover:bg-black/90 text-white shadow-lg transition-all duration-200"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+            </svg>
+            {t('watch.back')}
+          </button>
+
+          {/* Boutons en haut à droite */}
+          <div className="fixed top-6 right-8 z-[10000] flex items-center gap-2">
+            {/* Bouton Ouvrir dans une nouvelle page */}
+            <button
+              onClick={() => window.open(embedUrl || '', '_blank', 'noopener,noreferrer')}
+              className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-800/90 backdrop-blur-sm border border-gray-600 hover:bg-gray-700/90 text-white font-medium text-sm transition-all duration-200"
+              title={t('watch.openInNewPage')}
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+              </svg>
+            </button>
+
+            {/* Bouton Changer de source */}
+            <button
+              onClick={() => setShowEmbedQuality(true)}
+              className="flex items-center gap-2 px-3 py-2 rounded-lg bg-black/70 backdrop-blur-sm border border-gray-700 hover:bg-gray-800/80 text-white font-medium text-sm transition-all duration-200"
+            >
+              <svg className="w-4 h-4 text-red-500" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" /></svg>
+              <span className="hidden sm:inline">{t('watch.sources')}</span>
+            </button>
+          </div>
+
+          {/* Iframe pour les sources FStream */}
+          <iframe
+            key={`iframe-fstream-${embedUrl || ''}`}
+            src={embedUrl || ''}
+            className="w-full h-full border-0"
+            allowFullScreen
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+            sandbox={undefined}
+          ></iframe>
+
+          {/* Sources Menu Overlay */}
+          <AnimatePresence>
+            {showEmbedQuality && (
+              <motion.div
+                key="embed-quality-menu"
+                initial={{ opacity: 0, x: 300 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: 300 }}
+                transition={{ duration: 0.3, ease: 'easeOut' }}
+                className="fixed inset-0 z-[10000] bg-black/50 flex justify-end pointer-events-auto"
+              >
+                <div className="bg-black/95 backdrop-blur-lg border-l border-gray-800 shadow-2xl w-full max-w-md h-full overflow-y-auto z-[10000]">
+                  <div className="flex justify-between items-center p-4 border-b border-gray-700/60 sticky top-0 bg-black/95 z-10">
+                    <h3 className="text-white text-lg font-bold">{t('watch.changeSource')}</h3>
+                    <button
+                      onClick={() => setShowEmbedQuality(false)}
+                      className="text-gray-400 hover:text-red-500 transition-colors text-2xl font-bold focus:outline-none"
+                    >
+                      ×
+                    </button>
+                  </div>
+                  <div className="p-4">
+                    <HLSPlayer
+                      src={''}
+                      className="hidden"
+                      movieId={id || undefined}
+                      controls={false}
+                      nexusHlsSources={nexusHlsSources}
+                      nexusFileSources={nexusFileSources}
+                      rivestreamSources={isRivestreamAvailable() ? rivestreamSources : []}
+                      rivestreamCaptions={isRivestreamAvailable() ? rivestreamCaptions : []}
+                      loadingRivestream={isRivestreamAvailable() ? loadingRivestream : false}
+                      purstreamSources={purstreamSources}
+                      darkinoSources={darkinoSources}
+                      mp4Sources={mp4Sources}
+                      frembedAvailable={frembedAvailable}
+                      customSources={customSources}
+                      omegaSources={omegaData?.player_links || []}
+                      coflixSources={coflixData?.player_links || []}
+                      fstreamSources={fstreamSources}
+                      wiflixSources={wiflixSources}
+                      viperSources={viperSources}
+
+                      autoPlay={false}
+                      onlyQualityMenu={true}
+                      embedType={embedType || undefined}
+                      embedUrl={embedUrl || undefined}
+                      title={movieTitle}
+                      initialTime={watchProgress}
+                    />
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      ) : selectedSource === 'darkino' && darkinoSources.length > 0 && (!adPopupTriggered || shouldLoadIframe || hasClickedAd) ? (
+        <div className="w-full h-full flex items-center justify-center">
+          <HLSPlayer
+            key={`darkino-${selectedDarkinoSource}-${id}`}
+            src={darkinoSources[selectedDarkinoSource]?.m3u8 || darkinoSources[0]?.m3u8 || ""}
+            className="w-full h-full"
+            autoPlay={true}
+            onError={() => {
+              // If there's an error, try other sources
+              if (selectedDarkinoSource < darkinoSources.length - 1) {
+                const nextIndex = selectedDarkinoSource + 1;
+                setSelectedDarkinoSource(nextIndex);
+              } else {
+                // All darkino sources failed, try mp4
+                if (mp4Sources.length > 0) {
+                  setSelectedSource('mp4');
+                  setSelectedMp4Source(0);
+                  setVideoSource(mp4Sources[0].url);
+                } else {
+                  // Fallback order: Supervideo (Omega), Multi (Coflix), Frembed, Movix (custom)
+                  const supervideo = omegaData ? getSupervideoFromOmega(omegaData) : null;
+                  if (supervideo && omegaData) {
+                    setSelectedSource('omega');
+                    setSelectedOmegaPlayer(omegaData.player_links.findIndex((p: { player: string; link: string; is_hd: boolean; label?: string }) => p === supervideo));
+                    setEmbedUrl(supervideo.link);
+                    setEmbedType('omega');
+                  } else if (wiflixSources.length > 0) {
+                    console.log('✅ Selecting WIFLIX/LYNX as fallback source');
+                    setSelectedSource('wiflix');
+                    setSelectedWiflixSource(0);
+                    setEmbedUrl(wiflixSources[0].url);
+                    setEmbedType('wiflix');
+                    setEmbedType('wiflix');
+                  } else if (viperSources.length > 0) {
+                    setSelectedSource('viper' as any);
+                    setSelectedViperSource(0);
+                    setEmbedUrl(viperSources[0].url);
+                    setEmbedType('viper');
+                  } else {
+                    const multi = coflixData ? getMultiFromCoflix(coflixData) : null;
+                    if (multi && coflixData) {
+                      setSelectedSource('coflix');
+                      setSelectedPlayerLink(coflixData.player_links.findIndex((p: { decoded_url: string; clone_url?: string; quality: string; language: string }) => p === multi));
+                      setEmbedUrl(getCoflixPreferredUrl(multi));
+                      setEmbedType('coflix');
+                    } else if (frembedAvailable) {
+                      setSelectedSource('frembed');
+                      setVideoSource(`https://frembed.bond/api/film.php?id=${id}`);
+                      setEmbedUrl(`https://frembed.bond/api/film.php?id=${id}`);
+                      setEmbedType('frembed');
+                    } else if (customSources.length > 0) {
+                      setSelectedSource('custom');
+                      setEmbedUrl(customSources[0]);
+                      setEmbedType('custom');
+                    } else {
+                      setSelectedSource('vostfr');
+                      setEmbedUrl(`https://player.videasy.net/movie/${id}`);
+                      setEmbedType('vostfr');
+                    }
+                  }
+                }
+              }
+            }}
+            nextMovie={nextMovie}
+            onNextMovie={handleNextMovie}
+            poster={posterPath ? `https://image.tmdb.org/t/p/w500${posterPath}` : undefined}
+            backdrop={backdropPath ? `https://image.tmdb.org/t/p/w1280${backdropPath}` : undefined}
+            movieId={id || undefined}
+            controls={true}
+            nexusHlsSources={nexusHlsSources}
+            nexusFileSources={nexusFileSources}
+            rivestreamSources={rivestreamSources}
+            rivestreamCaptions={rivestreamCaptions}
+            loadingRivestream={loadingRivestream}
+            purstreamSources={purstreamSources}
+            darkinoSources={darkinoSources}
+            mp4Sources={mp4Sources}
+            frembedAvailable={frembedAvailable}
+            customSources={customSources}
+            omegaSources={omegaData?.player_links || []}
+            coflixSources={coflixData?.player_links || []}
+            fstreamSources={fstreamSources}
+            wiflixSources={wiflixSources}
+            viperSources={viperSources}
+
+            title={movieTitle}
+            initialTime={watchProgress}
+          />
+          {/* Sources Menu Overlay */}
+          <AnimatePresence>
+            {showEmbedQuality && (
+              <motion.div
+                key="embed-quality-menu"
+                initial={{ opacity: 0, x: 300 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: 300 }}
+                transition={{ duration: 0.3, ease: 'easeOut' }}
+                className="fixed inset-0 z-[10000] bg-black/50 flex justify-end pointer-events-auto"
+              >
+                <div className="bg-black/95 backdrop-blur-lg border-l border-gray-800 shadow-2xl w-full max-w-md h-full overflow-y-auto z-[10000]">
+                  <div className="flex justify-between items-center p-4 border-b border-gray-700/60 sticky top-0 bg-black/95 z-10">
+                    <h3 className="text-white text-lg font-bold">{t('watch.changeSource')}</h3>
+                    <button
+                      onClick={() => setShowEmbedQuality(false)}
+                      className="text-gray-400 hover:text-red-500 transition-colors text-2xl font-bold focus:outline-none"
+                    >
+                      ×
+                    </button>
+                  </div>
+                  <div className="p-4">
+                    <HLSPlayer
+                      src={''}
+                      className="hidden"
+                      movieId={id || undefined}
+                      controls={false}
+                      nexusHlsSources={nexusHlsSources}
+                      nexusFileSources={nexusFileSources}
+                      rivestreamSources={isRivestreamAvailable() ? rivestreamSources : []}
+                      rivestreamCaptions={isRivestreamAvailable() ? rivestreamCaptions : []}
+                      loadingRivestream={isRivestreamAvailable() ? loadingRivestream : false}
+                      purstreamSources={purstreamSources}
+                      darkinoSources={darkinoSources}
+                      mp4Sources={mp4Sources}
+                      frembedAvailable={frembedAvailable}
+                      customSources={customSources}
+                      omegaSources={omegaData?.player_links || []}
+                      coflixSources={coflixData?.player_links || []}
+                      fstreamSources={fstreamSources}
+                      wiflixSources={wiflixSources}
+                      viperSources={viperSources}
+
+                      autoPlay={false}
+                      onlyQualityMenu={true}
+                      embedType={embedType || undefined}
+                      embedUrl={embedUrl || undefined}
+                      title={movieTitle}
+                      initialTime={watchProgress}
+                    />
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      ) : selectedSource === 'mp4' && (!adPopupTriggered || shouldLoadIframe || hasClickedAd) ? (
+        <div className="w-full h-full flex items-center justify-center">
+          <HLSPlayer
+            key={`mp4-${selectedMp4Source}-${id}-${videoSource}`}
+            src={videoSource || mp4Sources[selectedMp4Source]?.url || ""}
+            className="w-full h-full"
+            autoPlay={true}
+            onError={() => {
+              // Try next MP4 source if available
+              if (selectedMp4Source < mp4Sources.length - 1) {
+                const nextIndex = selectedMp4Source + 1;
+                setSelectedMp4Source(nextIndex);
+                setVideoSource(mp4Sources[nextIndex].url);
+              } else if (darkinoSources.length > 0) {
+                setSelectedSource('darkino');
+                setSelectedDarkinoSource(0);
+              } else if (mp4Sources.length > 0) {
+                setSelectedSource('mp4');
+                setSelectedMp4Source(0);
+                setVideoSource(mp4Sources[0].url);
+              }
+            }}
+            nextMovie={nextMovie}
+            onNextMovie={handleNextMovie}
+            poster={posterPath ? `https://image.tmdb.org/t/p/w500${posterPath}` : undefined}
+            backdrop={backdropPath ? `https://image.tmdb.org/t/p/w1280${backdropPath}` : undefined}
+            movieId={id || undefined}
+            controls={true}
+            nexusHlsSources={nexusHlsSources}
+            nexusFileSources={nexusFileSources}
+            rivestreamSources={rivestreamSources}
+            rivestreamCaptions={rivestreamCaptions}
+            loadingRivestream={loadingRivestream}
+            purstreamSources={purstreamSources}
+            darkinoSources={darkinoSources}
+            mp4Sources={mp4Sources}
+            frembedAvailable={frembedAvailable}
+            customSources={customSources}
+            omegaSources={omegaData?.player_links || []}
+            coflixSources={coflixData?.player_links || []}
+            fstreamSources={fstreamSources}
+            wiflixSources={wiflixSources}
+            viperSources={viperSources}
+
+            title={movieTitle}
+            initialTime={watchProgress}
+          />
+          {/* Sources Menu Overlay */}
+          <AnimatePresence>
+            {showEmbedQuality && (
+              <motion.div
+                key="embed-quality-menu"
+                initial={{ opacity: 0, x: 300 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: 300 }}
+                transition={{ duration: 0.3, ease: 'easeOut' }}
+                className="fixed inset-0 z-[10000] bg-black/50 flex justify-end pointer-events-auto"
+              >
+                <div className="bg-black/95 backdrop-blur-lg border-l border-gray-800 shadow-2xl w-full max-w-md h-full overflow-y-auto z-[10000]">
+                  <div className="flex justify-between items-center p-4 border-b border-gray-700/60 sticky top-0 bg-black/95 z-10">
+                    <h3 className="text-white text-lg font-bold">{t('watch.changeSource')}</h3>
+                    <button
+                      onClick={() => setShowEmbedQuality(false)}
+                      className="text-gray-400 hover:text-red-500 transition-colors text-2xl font-bold focus:outline-none"
+                    >
+                      ×
+                    </button>
+                  </div>
+                  <div className="p-4">
+                    <HLSPlayer
+                      src={''}
+                      className="hidden"
+                      movieId={id || undefined}
+                      controls={false}
+                      darkinoSources={darkinoSources}
+                      mp4Sources={mp4Sources}
+                      frembedAvailable={frembedAvailable}
+                      customSources={customSources}
+                      omegaSources={omegaData?.player_links || []}
+                      coflixSources={coflixData?.player_links || []}
+                      fstreamSources={fstreamSources}
+                      wiflixSources={wiflixSources}
+                      viperSources={viperSources}
+
+                      autoPlay={false}
+                      onlyQualityMenu={true}
+                      embedType={embedType || undefined}
+                      embedUrl={embedUrl || undefined}
+                      title={movieTitle}
+                      initialTime={watchProgress}
+                    />
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      ) : ((selectedSource === 'nexus_hls' && nexusHlsSources.length > 0) || (selectedSource === 'bravo' && purstreamSources.length > 0)) && (!adPopupTriggered || shouldLoadIframe || hasClickedAd) ? (
+        <div className="w-full h-full flex items-center justify-center">
+          <HLSPlayer
+            key={`nexus_hls-${selectedNexusHlsSource}-${id}-${videoSource}`}
+            src={videoSource || nexusHlsSources[selectedNexusHlsSource]?.url || ""}
+            className="w-full h-full"
+            autoPlay={true}
+            onError={() => {
+              // Try next Nexus HLS source if available
+              if (selectedNexusHlsSource < nexusHlsSources.length - 1) {
+                const nextIndex = selectedNexusHlsSource + 1;
+                setSelectedNexusHlsSource(nextIndex);
+                setVideoSource(nexusHlsSources[nextIndex].url);
+              } else if (nexusFileSources.length > 0) {
+                setSelectedSource('nexus_file');
+                setSelectedNexusFileSource(0);
+                setVideoSource(nexusFileSources[0].url);
+              } else if (darkinoSources.length > 0) {
+                setSelectedSource('darkino');
+                setSelectedDarkinoSource(0);
+              }
+            }}
+            nextMovie={nextMovie}
+            onNextMovie={handleNextMovie}
+            poster={posterPath ? `https://image.tmdb.org/t/p/w500${posterPath}` : undefined}
+            backdrop={backdropPath ? `https://image.tmdb.org/t/p/w1280${backdropPath}` : undefined}
+            movieId={id || undefined}
+            controls={true}
+            nexusHlsSources={nexusHlsSources}
+            nexusFileSources={nexusFileSources}
+            rivestreamSources={rivestreamSources}
+            rivestreamCaptions={rivestreamCaptions}
+            loadingRivestream={loadingRivestream}
+            purstreamSources={purstreamSources}
+            darkinoSources={darkinoSources}
+            mp4Sources={mp4Sources}
+            frembedAvailable={frembedAvailable}
+            customSources={customSources}
+            omegaSources={omegaData?.player_links || []}
+            coflixSources={coflixData?.player_links || []}
+            fstreamSources={fstreamSources}
+            wiflixSources={wiflixSources}
+            viperSources={viperSources}
+
+            title={movieTitle}
+            initialTime={watchProgress}
+          />
+          {/* Sources Menu Overlay */}
+          <AnimatePresence>
+            {showEmbedQuality && (
+              <motion.div
+                key="embed-quality-menu"
+                initial={{ opacity: 0, x: 300 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: 300 }}
+                transition={{ duration: 0.3, ease: 'easeOut' }}
+                className="fixed inset-0 z-[10000] bg-black/50 flex justify-end pointer-events-auto"
+              >
+                <div className="bg-black/95 backdrop-blur-lg border-l border-gray-800 shadow-2xl w-full max-w-md h-full overflow-y-auto z-[10000]">
+                  <div className="flex justify-between items-center p-4 border-b border-gray-700/60 sticky top-0 bg-black/95 z-10">
+                    <h3 className="text-white text-lg font-bold">{t('watch.changeSource')}</h3>
+                    <button
+                      onClick={() => setShowEmbedQuality(false)}
+                      className="text-gray-400 hover:text-red-500 transition-colors text-2xl font-bold focus:outline-none"
+                    >
+                      ×
+                    </button>
+                  </div>
+                  <div className="p-4">
+                    <HLSPlayer
+                      src={''}
+                      className="hidden"
+                      movieId={id || undefined}
+                      controls={false}
+                      nexusHlsSources={nexusHlsSources}
+                      nexusFileSources={nexusFileSources}
+                      rivestreamSources={isRivestreamAvailable() ? rivestreamSources : []}
+                      rivestreamCaptions={isRivestreamAvailable() ? rivestreamCaptions : []}
+                      loadingRivestream={isRivestreamAvailable() ? loadingRivestream : false}
+                      purstreamSources={purstreamSources}
+                      darkinoSources={darkinoSources}
+                      mp4Sources={mp4Sources}
+                      frembedAvailable={frembedAvailable}
+                      customSources={customSources}
+                      omegaSources={omegaData?.player_links || []}
+                      coflixSources={coflixData?.player_links || []}
+                      fstreamSources={fstreamSources}
+                      wiflixSources={wiflixSources}
+                      viperSources={viperSources}
+
+                      autoPlay={false}
+                      onlyQualityMenu={true}
+                      embedType={embedType || undefined}
+                      embedUrl={embedUrl || undefined}
+                      title={movieTitle}
+                      initialTime={watchProgress}
+                    />
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      ) : selectedSource === 'nexus_file' && nexusFileSources.length > 0 && (!adPopupTriggered || shouldLoadIframe || hasClickedAd) ? (
+        <div className="w-full h-full flex items-center justify-center">
+          <HLSPlayer
+            key={`nexus_file-${selectedNexusFileSource}-${id}-${videoSource}`}
+            src={videoSource || nexusFileSources[selectedNexusFileSource]?.url || ""}
+            className="w-full h-full"
+            autoPlay={true}
+            onError={() => {
+              // Try next Nexus File source if available
+              if (selectedNexusFileSource < nexusFileSources.length - 1) {
+                const nextIndex = selectedNexusFileSource + 1;
+                setSelectedNexusFileSource(nextIndex);
+                setVideoSource(nexusFileSources[nextIndex].url);
+              } else if (nexusHlsSources.length > 0) {
+                setSelectedSource('nexus_hls');
+                setSelectedNexusHlsSource(0);
+                setVideoSource(nexusHlsSources[0].url);
+              } else if (darkinoSources.length > 0) {
+                setSelectedSource('darkino');
+                setSelectedDarkinoSource(0);
+              }
+            }}
+            nextMovie={nextMovie}
+            onNextMovie={handleNextMovie}
+            poster={posterPath ? `https://image.tmdb.org/t/p/w500${posterPath}` : undefined}
+            backdrop={backdropPath ? `https://image.tmdb.org/t/p/w1280${backdropPath}` : undefined}
+            movieId={id || undefined}
+            controls={true}
+            nexusHlsSources={nexusHlsSources}
+            nexusFileSources={nexusFileSources}
+            rivestreamSources={rivestreamSources}
+            rivestreamCaptions={rivestreamCaptions}
+            loadingRivestream={loadingRivestream}
+            purstreamSources={purstreamSources}
+            darkinoSources={darkinoSources}
+            mp4Sources={mp4Sources}
+            frembedAvailable={frembedAvailable}
+            customSources={customSources}
+            omegaSources={omegaData?.player_links || []}
+            coflixSources={coflixData?.player_links || []}
+            fstreamSources={fstreamSources}
+            wiflixSources={wiflixSources}
+            viperSources={viperSources}
+
+            title={movieTitle}
+            initialTime={watchProgress}
+          />
+          {/* Sources Menu Overlay */}
+          <AnimatePresence>
+            {showEmbedQuality && (
+              <motion.div
+                key="embed-quality-menu"
+                initial={{ opacity: 0, x: 300 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: 300 }}
+                transition={{ duration: 0.3, ease: 'easeOut' }}
+                className="fixed inset-0 z-[10000] bg-black/50 flex justify-end pointer-events-auto"
+              >
+                <div className="bg-black/95 backdrop-blur-lg border-l border-gray-800 shadow-2xl w-full max-w-md h-full overflow-y-auto z-[10000]">
+                  <div className="flex justify-between items-center p-4 border-b border-gray-700/60 sticky top-0 bg-black/95 z-10">
+                    <h3 className="text-white text-lg font-bold">{t('watch.changeSource')}</h3>
+                    <button
+                      onClick={() => setShowEmbedQuality(false)}
+                      className="text-gray-400 hover:text-red-500 transition-colors text-2xl font-bold focus:outline-none"
+                    >
+                      ×
+                    </button>
+                  </div>
+                  <div className="p-4">
+                    <HLSPlayer
+                      src={''}
+                      className="hidden"
+                      movieId={id || undefined}
+                      controls={false}
+                      nexusHlsSources={nexusHlsSources}
+                      nexusFileSources={nexusFileSources}
+                      rivestreamSources={isRivestreamAvailable() ? rivestreamSources : []}
+                      rivestreamCaptions={isRivestreamAvailable() ? rivestreamCaptions : []}
+                      loadingRivestream={isRivestreamAvailable() ? loadingRivestream : false}
+                      purstreamSources={purstreamSources}
+                      darkinoSources={darkinoSources}
+                      mp4Sources={mp4Sources}
+                      frembedAvailable={frembedAvailable}
+                      customSources={customSources}
+                      omegaSources={omegaData?.player_links || []}
+                      coflixSources={coflixData?.player_links || []}
+                      fstreamSources={fstreamSources}
+                      wiflixSources={wiflixSources}
+                      viperSources={viperSources}
+
+                      autoPlay={false}
+                      onlyQualityMenu={true}
+                      embedType={embedType || undefined}
+                      embedUrl={embedUrl || undefined}
+                      title={movieTitle}
+                      initialTime={watchProgress}
+                    />
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      ) : selectedSource === 'rivestream_hls' && (!adPopupTriggered || shouldLoadIframe || hasClickedAd) ? (
+        <div className="w-full h-full flex items-center justify-center">
+          {loadingRivestream ? (
+            <div className="flex flex-col items-center justify-center h-full bg-black">
+              <div className="loading-container">
+                <div className="loading-bar"></div>
+                <div className="loading-bar"></div>
+                <div className="loading-bar"></div>
+                <div className="loading-bar"></div>
+              </div>
+              <div className="text-white text-xl font-medium mt-6">{t('watch.loadingVostfrSources')}</div>
+            </div>
+          ) : rivestreamSources.length > 0 ? (
+            <>
+              <HLSPlayer
+                key={`rivestream-${selectedRivestreamSource}-${id}-${videoSource}`}
+                src={videoSource || rivestreamSources[selectedRivestreamSource]?.url || ""}
+                className="w-full h-full"
+                autoPlay={true}
+                onError={() => {
+                  // Try next Rivestream source if available
+                  if (selectedRivestreamSource < rivestreamSources.length - 1) {
+                    const nextIndex = selectedRivestreamSource + 1;
+                    setSelectedRivestreamSource(nextIndex);
+                    setVideoSource(rivestreamSources[nextIndex].url);
+                  } else {
+                    // No more Rivestream sources, fallback to other sources
+                    if (nexusHlsSources.length > 0) {
+                      setSelectedSource('nexus_hls');
+                      setSelectedNexusHlsSource(0);
+                      setVideoSource(nexusHlsSources[0].url);
+                    } else if (darkinoSources.length > 0) {
+                      setSelectedSource('darkino');
+                      setSelectedDarkinoSource(0);
+                    }
+                  }
+                }}
+                nextMovie={nextMovie}
+                onNextMovie={handleNextMovie}
+                poster={posterPath ? `https://image.tmdb.org/t/p/w500${posterPath}` : undefined}
+                backdrop={backdropPath ? `https://image.tmdb.org/t/p/w1280${backdropPath}` : undefined}
+                movieId={id || undefined}
+                controls={true}
+                nexusHlsSources={nexusHlsSources}
+                nexusFileSources={nexusFileSources}
+                rivestreamSources={rivestreamSources}
+                rivestreamCaptions={rivestreamCaptions}
+                loadingRivestream={loadingRivestream}
+                darkinoSources={darkinoSources}
+                mp4Sources={mp4Sources}
+                frembedAvailable={frembedAvailable}
+                customSources={customSources}
+                omegaSources={omegaData?.player_links || []}
+                coflixSources={coflixData?.player_links || []}
+                fstreamSources={fstreamSources}
+                wiflixSources={wiflixSources}
+                viperSources={viperSources}
+
+                title={movieTitle}
+                initialTime={watchProgress}
+              />
+              {/* Sources Menu Overlay */}
+              <AnimatePresence>
+                {showEmbedQuality && (
+                  <motion.div
+                    key="embed-quality-menu"
+                    initial={{ opacity: 0, x: 300 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    exit={{ opacity: 0, x: 300 }}
+                    transition={{ duration: 0.3, ease: 'easeOut' }}
+                    className="fixed inset-0 z-[10000] bg-black/50 flex justify-end pointer-events-auto"
+                  >
+                    <div className="bg-black/95 backdrop-blur-lg border-l border-gray-800 shadow-2xl w-full max-w-md h-full overflow-y-auto z-[10000]">
+                      <div className="flex justify-between items-center p-4 border-b border-gray-700/60 sticky top-0 bg-black/95 z-10">
+                        <h3 className="text-white text-lg font-bold">{t('watch.changeSource')}</h3>
+                        <button
+                          onClick={() => setShowEmbedQuality(false)}
+                          className="text-gray-400 hover:text-red-500 transition-colors text-2xl font-bold focus:outline-none"
+                        >
+                          ×
+                        </button>
+                      </div>
+                      <div className="p-4">
+                        <HLSPlayer
+                          src={''}
+                          className="hidden"
+                          movieId={id || undefined}
+                          controls={false}
+                          nexusHlsSources={nexusHlsSources}
+                          nexusFileSources={nexusFileSources}
+                          darkinoSources={darkinoSources}
+                          mp4Sources={mp4Sources}
+                          frembedAvailable={frembedAvailable}
+                          customSources={customSources}
+                          omegaSources={omegaData?.player_links || []}
+                          coflixSources={coflixData?.player_links || []}
+                          fstreamSources={fstreamSources}
+                          wiflixSources={wiflixSources}
+                          viperSources={viperSources}
+
+                          autoPlay={false}
+                          onlyQualityMenu={true}
+                          embedType={embedType || undefined}
+                          embedUrl={embedUrl || undefined}
+                          title={movieTitle}
+                          initialTime={watchProgress}
+                        />
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </>
+          ) : (
+            <div className="flex flex-col items-center justify-center h-full bg-black">
+              <HLSPlayer
+                src={''}
+                className="hidden"
+                movieId={id || undefined}
+                controls={false}
+                nexusHlsSources={nexusHlsSources}
+                nexusFileSources={nexusFileSources}
+                darkinoSources={darkinoSources}
+                mp4Sources={mp4Sources}
+                frembedAvailable={frembedAvailable}
+                customSources={customSources}
+                omegaSources={omegaData?.player_links || []}
+                coflixSources={coflixData?.player_links || []}
+                fstreamSources={fstreamSources}
+                wiflixSources={wiflixSources}
+                viperSources={viperSources}
+
+                autoPlay={false}
+                onlyQualityMenu={true}
+                embedType={embedType || undefined}
+                embedUrl={embedUrl || undefined}
+                title={movieTitle}
+                initialTime={watchProgress}
+              />
+            </div>
+          )}
+        </div>
+      ) : selectedSource === 'darkino' && darkinoSources.length > 0 && (!adPopupTriggered || shouldLoadIframe || hasClickedAd) ? (
+        <div className="w-full h-full flex items-center justify-center">
+          <HLSPlayer
+            key={`darkino-${selectedDarkinoSource}-${id}`}
+            src={darkinoSources[selectedDarkinoSource]?.m3u8 || darkinoSources[0]?.m3u8 || ""}
+            className="w-full h-full"
+            autoPlay={true}
+            onError={() => {
+              // Try next Darkino source if available
+              if (selectedDarkinoSource < darkinoSources.length - 1) {
+                const nextIndex = selectedDarkinoSource + 1;
+                setSelectedDarkinoSource(nextIndex);
+                setVideoSource(darkinoSources[nextIndex].m3u8);
+              } else if (nexusFileSources.length > 0) {
+                setSelectedSource('nexus_file');
+                setSelectedNexusFileSource(0);
+                setVideoSource(nexusFileSources[0].url);
+              } else if (nexusHlsSources.length > 0) {
+                setSelectedSource('nexus_hls');
+                setSelectedNexusHlsSource(0);
+                setVideoSource(nexusHlsSources[0].url);
+              } else if (darkinoSources.length > 0) {
+                setSelectedSource('darkino');
+                setSelectedDarkinoSource(0);
+              }
+            }}
+            nextMovie={nextMovie}
+            onNextMovie={handleNextMovie}
+            poster={posterPath ? `https://image.tmdb.org/t/p/w500${posterPath}` : undefined}
+            backdrop={backdropPath ? `https://image.tmdb.org/t/p/w1280${backdropPath}` : undefined}
+            movieId={id || undefined}
+            controls={true}
+            nexusHlsSources={nexusHlsSources}
+            nexusFileSources={nexusFileSources}
+            rivestreamSources={rivestreamSources}
+            rivestreamCaptions={rivestreamCaptions}
+            loadingRivestream={loadingRivestream}
+            purstreamSources={purstreamSources}
+            darkinoSources={darkinoSources}
+            mp4Sources={mp4Sources}
+            frembedAvailable={frembedAvailable}
+            customSources={customSources}
+            omegaSources={omegaData?.player_links || []}
+            coflixSources={coflixData?.player_links || []}
+            fstreamSources={fstreamSources}
+            wiflixSources={wiflixSources}
+            viperSources={viperSources}
+
+            title={movieTitle}
+            initialTime={watchProgress}
+          />
+          {/* Sources Menu Overlay */}
+          <AnimatePresence>
+            {showEmbedQuality && (
+              <motion.div
+                key="embed-quality-menu"
+                initial={{ opacity: 0, x: 300 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: 300 }}
+                transition={{ duration: 0.3, ease: 'easeOut' }}
+                className="fixed inset-0 z-[10000] bg-black/50 flex justify-end pointer-events-auto"
+              >
+                <div className="bg-black/95 backdrop-blur-lg border-l border-gray-800 shadow-2xl w-full max-w-md h-full overflow-y-auto z-[10000]">
+                  <div className="flex justify-between items-center p-4 border-b border-gray-700/60 sticky top-0 bg-black/95 z-10">
+                    <h3 className="text-white text-lg font-bold">{t('watch.changeSource')}</h3>
+                    <button
+                      onClick={() => setShowEmbedQuality(false)}
+                      className="text-gray-400 hover:text-red-500 transition-colors text-2xl font-bold focus:outline-none"
+                    >
+                      ×
+                    </button>
+                  </div>
+                  <div className="p-4">
+                    <HLSPlayer
+                      src={''}
+                      className="hidden"
+                      movieId={id || undefined}
+                      controls={false}
+                      darkinoSources={darkinoSources}
+                      mp4Sources={mp4Sources}
+                      frembedAvailable={frembedAvailable}
+                      customSources={customSources}
+                      omegaSources={omegaData?.player_links || []}
+                      coflixSources={coflixData?.player_links || []}
+                      fstreamSources={fstreamSources}
+                      wiflixSources={wiflixSources}
+                      viperSources={viperSources}
+
+                      autoPlay={false}
+                      onlyQualityMenu={true}
+                      embedType={embedType || undefined}
+                      embedUrl={embedUrl || undefined}
+                      title={movieTitle}
+                      initialTime={watchProgress}
+                    />
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      ) : embedUrl ? (
+        <div className="w-full h-full flex flex-col items-center justify-center relative">
+          {/* Back to Info Button */}
+          <button
+            onClick={() => navigate(`/movie/${id}`)}
+            className="fixed top-6 left-8 z-[9999] flex items-center gap-2 px-3 py-2 rounded-lg bg-black/70 hover:bg-black/90 text-white shadow-lg transition-all duration-200"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+            </svg>
+            {t('watch.back')}
+          </button>
+
+          {/* Boutons en haut à droite */}
+          <div className="fixed top-6 right-8 z-[10000] flex items-center gap-2">
+            {/* Bouton Ouvrir dans une nouvelle page */}
+            <button
+              onClick={() => window.open(embedUrl || '', '_blank', 'noopener,noreferrer')}
+              className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-800/90 backdrop-blur-sm border border-gray-600 hover:bg-gray-700/90 text-white font-medium text-sm transition-all duration-200"
+              title={t('watch.openInNewPage')}
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+              </svg>
+            </button>
+
+            {/* Bouton Changer de source */}
+            <button
+              onClick={() => setShowEmbedQuality(true)}
+              className="flex items-center gap-2 px-3 py-2 rounded-lg bg-black/70 backdrop-blur-sm border border-gray-700 hover:bg-gray-800/80 text-white font-medium text-sm transition-all duration-200"
+            >
+              <svg className="w-4 h-4 text-red-500" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" /></svg>
+              <span className="hidden sm:inline">{t('watch.sources')}</span>
+            </button>
+          </div>
+
+          {/* Iframe pour les sources embed */}
+          <iframe
+            key={`iframe-${embedType || ''}-${embedUrl || ''}`}
+            src={embedUrl || ''}
+            className="w-full h-full border-0"
+            allowFullScreen
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+            sandbox={(() => {
+              const urlLower = embedUrl ? embedUrl.toLowerCase() : '';
+
+
+              // Jamais de sandbox pour Mixdrop, Doodstream, ou les lecteurs multi (emmmmbed.com, lecteur6.com)
+              if (urlLower.includes("mixdrop") || urlLower.includes("dood") || urlLower.includes("emmmmbed") || urlLower.includes("lecteur6")) {
+                return undefined;
+              }
+              // Jamais de sandbox pour supervideo ou dropload
+              if (urlLower.includes("supervideo") || urlLower.includes("dropload")) {
+                return undefined;
+              }
+              // Pour Coflix: jamais de sandbox pour les lecteurs multi
+              if (embedType === 'coflix') {
+                return undefined;
+              }
+              // Par défaut, pas de sandbox
+              return undefined;
+            })()}
+          ></iframe>
+
+          {/* Sources Menu Overlay */}
+          <AnimatePresence>
+            {showEmbedQuality && (
+              <motion.div
+                key="embed-quality-menu"
+                initial={{ opacity: 0, x: 300 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: 300 }}
+                transition={{ duration: 0.3, ease: 'easeOut' }}
+                className="fixed inset-0 z-[10000] bg-black/50 flex justify-end pointer-events-auto"
+              >
+                <div className="bg-black/95 backdrop-blur-lg border-l border-gray-800 shadow-2xl w-full max-w-md h-full overflow-y-auto z-[10000]">
+                  <div className="flex justify-between items-center p-4 border-b border-gray-700/60 sticky top-0 bg-black/95 z-10">
+                    <h3 className="text-white text-lg font-bold">{t('watch.changeSource')}</h3>
+                    <button
+                      onClick={() => setShowEmbedQuality(false)}
+                      className="text-gray-400 hover:text-red-500 transition-colors text-2xl font-bold focus:outline-none"
+                    >
+                      ×
+                    </button>
+                  </div>
+                  <div className="p-4">
+                    <HLSPlayer
+                      src={''}
+                      className="hidden"
+                      movieId={id || undefined}
+                      controls={false}
+                      nexusHlsSources={nexusHlsSources}
+                      nexusFileSources={nexusFileSources}
+                      rivestreamSources={isRivestreamAvailable() ? rivestreamSources : []}
+                      rivestreamCaptions={isRivestreamAvailable() ? rivestreamCaptions : []}
+                      loadingRivestream={isRivestreamAvailable() ? loadingRivestream : false}
+                      purstreamSources={purstreamSources}
+                      darkinoSources={darkinoSources}
+                      mp4Sources={mp4Sources}
+                      frembedAvailable={frembedAvailable}
+                      customSources={customSources}
+                      omegaSources={omegaData?.player_links || []}
+                      coflixSources={coflixData?.player_links || []}
+                      fstreamSources={fstreamSources}
+                      wiflixSources={wiflixSources}
+                      viperSources={viperSources}
+
+                      autoPlay={false}
+                      onlyQualityMenu={true}
+                      embedType={embedType || undefined}
+                      embedUrl={embedUrl || undefined}
+                      title={movieTitle}
+                      initialTime={watchProgress}
+                    />
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      ) : (
+        // Show VO/VOSTFR when nothing else is available
+        <div className="w-full h-full flex flex-col items-center justify-center relative">
+          {/* Back to Info Button */}
+          <button
+            onClick={() => navigate(`/movie/${id}`)}
+            className="fixed top-6 left-8 z-[9999] flex items-center gap-2 px-3 py-2 rounded-lg bg-black/70 hover:bg-black/90 text-white shadow-lg transition-all duration-200"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+            </svg>
+            {t('watch.back')}
+          </button>
+
+          {/* Boutons en haut à droite */}
+          <div className="fixed top-6 right-8 z-[10000] flex items-center gap-2">
+            {/* Bouton Ouvrir dans une nouvelle page */}
+            <button
+              onClick={() => window.open(selectedSource === 'vostfr' ? `https://player.videasy.net/movie/${id}` : `https://frembed.bond/api/film.php?id=${id}`, '_blank', 'noopener,noreferrer')}
+              className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-800/90 backdrop-blur-sm border border-gray-600 hover:bg-gray-700/90 text-white font-medium text-sm transition-all duration-200"
+              title={t('watch.openInNewPage')}
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+              </svg>
+            </button>
+
+            {/* Bouton Changer de source */}
+            <button
+              onClick={() => setShowEmbedQuality(true)}
+              className="flex items-center gap-2 px-3 py-2 rounded-lg bg-black/70 backdrop-blur-sm border border-gray-700 hover:bg-gray-800/80 text-white font-medium text-sm transition-all duration-200"
+            >
+              <svg className="w-4 h-4 text-red-500" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" /></svg>
+              <span className="hidden sm:inline">{t('watch.sources')}</span>
+            </button>
+          </div>
+
+          <iframe
+            src={selectedSource === 'vostfr' ? `https://player.videasy.net/movie/${id}` : `https://frembed.bond/api/film.php?id=${id}`}
+            className="w-full h-full border-0"
+            allowFullScreen
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+          ></iframe>
+
+          <AnimatePresence>
+            {showEmbedQuality && (
+              <motion.div
+                key="embed-quality-menu"
+                initial={{ opacity: 0, x: 300 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: 300 }}
+                transition={{ duration: 0.3, ease: 'easeOut' }}
+                className="fixed inset-0 z-[10000] bg-black/50 flex justify-end pointer-events-auto"
+              >
+                <div className="bg-black/95 backdrop-blur-lg border-l border-gray-800 shadow-2xl w-full max-w-md h-full overflow-y-auto z-[10000]">
+                  <div className="flex justify-between items-center p-4 border-b border-gray-700/60 sticky top-0 bg-black/95 z-10">
+                    <h3 className="text-white text-lg font-bold">{t('watch.changeSource')}</h3>
+                    <button
+                      onClick={() => setShowEmbedQuality(false)}
+                      className="text-gray-400 hover:text-red-500 transition-colors text-2xl font-bold focus:outline-none"
+                    >
+                      ×
+                    </button>
+                  </div>
+                  <div className="p-4">
+                    <HLSPlayer
+                      src={''}
+                      className="hidden"
+                      movieId={id || undefined}
+                      controls={false}
+                      nexusHlsSources={nexusHlsSources}
+                      nexusFileSources={nexusFileSources}
+                      rivestreamSources={isRivestreamAvailable() ? rivestreamSources : []}
+                      rivestreamCaptions={isRivestreamAvailable() ? rivestreamCaptions : []}
+                      loadingRivestream={isRivestreamAvailable() ? loadingRivestream : false}
+                      purstreamSources={purstreamSources}
+                      darkinoSources={darkinoSources}
+                      mp4Sources={mp4Sources}
+                      frembedAvailable={frembedAvailable}
+                      customSources={customSources}
+                      omegaSources={omegaData?.player_links || []}
+                      coflixSources={coflixData?.player_links || []}
+                      fstreamSources={fstreamSources}
+                      wiflixSources={wiflixSources}
+                      viperSources={viperSources}
+
+                      autoPlay={false}
+                      onlyQualityMenu={true}
+                      embedType={embedType || undefined}
+                      embedUrl={embedUrl || undefined}
+                      title={movieTitle}
+                      initialTime={watchProgress}
+                    />
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      )}
+
+    </div>
+  );
+};
+
+export default WatchMovie;

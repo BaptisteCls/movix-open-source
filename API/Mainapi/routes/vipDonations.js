@@ -1,0 +1,381 @@
+const express = require('express');
+const rateLimit = require('express-rate-limit');
+const { ipKeyGenerator } = require('express-rate-limit');
+
+const { getPool } = require('../mysqlPool');
+const { isAdmin, getAuthIfValid } = require('../middleware/auth');
+const { createRedisRateLimitStore } = require('../utils/redisRateLimitStore');
+const { verifyTurnstileFromRequest } = require('../utils/turnstile');
+const {
+  createVipInvoice,
+  handlePaygateCallback,
+  fetchInvoiceByPublicId,
+  fetchInvoiceByGiftToken,
+  getVipInvoiceDetails,
+  listVipInvoices,
+  refreshInvoiceStatus,
+  forceValidateInvoice,
+  cancelInvoice,
+  serializePublicInvoice,
+  serializeAdminInvoice,
+  serializeGift,
+  unsealGift,
+  ensureVipDonationsTables,
+  getClientIp
+} = require('../utils/vipDonations');
+
+const router = express.Router();
+
+const getRateLimitKey = (req) => req.headers['cf-connecting-ip']
+  || req.headers['x-forwarded-for']?.split(',')[0].trim()
+  || ipKeyGenerator(req.ip);
+
+const getRequestBaseUrl = (req) => {
+  const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
+  const forwardedHost = String(req.headers['x-forwarded-host'] || '').split(',')[0].trim();
+  const protocol = forwardedProto || req.protocol || 'https';
+  const host = forwardedHost || req.get('host') || '';
+
+  return host ? `${protocol}://${host}`.replace(/\/+$/, '') : '';
+};
+
+const createInvoiceRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 15,
+  store: createRedisRateLimitStore({ prefix: 'rate-limit:vip:create-invoice:' }),
+  passOnStoreError: true,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: getRateLimitKey,
+  validate: { xForwardedForHeader: false, ip: false },
+  message: {
+    success: false,
+    error: 'Trop de créations d\'invoice. Réessayez plus tard.'
+  }
+});
+
+const invoiceCheckRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 180,
+  store: createRedisRateLimitStore({ prefix: 'rate-limit:vip:invoice-check:' }),
+  passOnStoreError: true,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: getRateLimitKey,
+  validate: { xForwardedForHeader: false, ip: false },
+  message: {
+    success: false,
+    error: 'Trop de vérifications d\'invoice. Réessayez plus tard.'
+  }
+});
+
+const giftUnsealRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  store: createRedisRateLimitStore({ prefix: 'rate-limit:vip:gift-unseal:' }),
+  passOnStoreError: true,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: getRateLimitKey,
+  validate: { xForwardedForHeader: false, ip: false },
+  message: {
+    success: false,
+    error: 'Trop de tentatives de descellement. Réessayez plus tard.'
+  }
+});
+
+router.post('/vip/invoices', createInvoiceRateLimit, async (req, res) => {
+  try {
+    const pool = getPool();
+    const turnstileResult = await verifyTurnstileFromRequest(req, req.body?.turnstileToken);
+    if (!turnstileResult.valid) {
+      return res.status(turnstileResult.status).json({
+        success: false,
+        error: turnstileResult.error
+      });
+    }
+
+    const auth = await getAuthIfValid(req);
+    const invoice = await createVipInvoice(
+      pool,
+      {
+        packEur: req.body?.pack_eur,
+        paymentMethod: req.body?.payment_method,
+        coin: req.body?.coin,
+        recipientMode: req.body?.recipient_mode,
+        payerEmail: req.body?.payer_email
+      },
+      {
+        auth,
+        ipAddress: getClientIp(req),
+        callbackBaseUrl: getRequestBaseUrl(req)
+      }
+    );
+
+    return res.status(201).json({
+      success: true,
+      invoice: serializePublicInvoice(invoice)
+    });
+  } catch (error) {
+    console.error('VIP invoice create error:', error);
+    return res.status(400).json({
+      success: false,
+      error: error.message || 'Impossible de créer l\'invoice VIP'
+    });
+  }
+});
+
+router.get('/vip/paygate/callback', async (req, res) => {
+  try {
+    const pool = getPool();
+    const invoice = await handlePaygateCallback(pool, req.query);
+
+    return res.json({
+      success: true,
+      invoice: serializePublicInvoice(invoice)
+    });
+  } catch (error) {
+    console.error('VIP PayGate callback error:', error);
+    return res.status(error.statusCode || 400).json({
+      success: false,
+      error: error.message || 'Callback PayGate invalide'
+    });
+  }
+});
+
+router.get('/vip/invoices/:publicId', async (req, res) => {
+  try {
+    const pool = getPool();
+    const invoice = await fetchInvoiceByPublicId(pool, req.params.publicId);
+    if (!invoice) {
+      return res.status(404).json({
+        success: false,
+        error: 'Invoice introuvable'
+      });
+    }
+
+    return res.json({
+      success: true,
+      invoice: serializePublicInvoice(invoice)
+    });
+  } catch (error) {
+    console.error('VIP invoice fetch error:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Impossible de récupérer l\'invoice'
+    });
+  }
+});
+
+router.post('/vip/invoices/:publicId/check', invoiceCheckRateLimit, async (req, res) => {
+  try {
+    const pool = getPool();
+    const invoice = await fetchInvoiceByPublicId(pool, req.params.publicId);
+    if (!invoice) {
+      return res.status(404).json({
+        success: false,
+        error: 'Invoice introuvable'
+      });
+    }
+
+    const refreshedInvoice = await refreshInvoiceStatus(pool, invoice, {
+      actorType: 'system',
+      actorId: invoice.public_id
+    });
+
+    return res.json({
+      success: true,
+      invoice: serializePublicInvoice(refreshedInvoice)
+    });
+  } catch (error) {
+    console.error('VIP invoice check error:', error);
+    const pool = getPool();
+    const invoice = await fetchInvoiceByPublicId(pool, req.params.publicId);
+    return res.status(502).json({
+      success: false,
+      error: 'Vérification blockchain indisponible temporairement',
+      invoice: serializePublicInvoice(invoice)
+    });
+  }
+});
+
+router.get('/vip/gifts/:giftToken', async (req, res) => {
+  try {
+    const pool = getPool();
+    const invoice = await fetchInvoiceByGiftToken(pool, req.params.giftToken);
+    if (!invoice) {
+      return res.status(404).json({
+        success: false,
+        error: 'Cadeau introuvable'
+      });
+    }
+
+    return res.json({
+      success: true,
+      gift: serializeGift(invoice)
+    });
+  } catch (error) {
+    console.error('VIP gift fetch error:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Impossible de récupérer le cadeau'
+    });
+  }
+});
+
+router.post('/vip/gifts/:giftToken/unseal', giftUnsealRateLimit, async (req, res) => {
+  try {
+    const pool = getPool();
+    const turnstileResult = await verifyTurnstileFromRequest(req, req.body?.turnstileToken);
+    if (!turnstileResult.valid) {
+      return res.status(turnstileResult.status).json({
+        success: false,
+        error: turnstileResult.error
+      });
+    }
+
+    const invoice = await fetchInvoiceByGiftToken(pool, req.params.giftToken);
+    if (!invoice) {
+      return res.status(404).json({
+        success: false,
+        error: 'Cadeau introuvable'
+      });
+    }
+
+    const unsealedInvoice = await unsealGift(
+      pool,
+      req.params.giftToken,
+      getClientIp(req)
+    );
+
+    return res.json({
+      success: true,
+      gift: serializeGift(unsealedInvoice)
+    });
+  } catch (error) {
+    console.error('VIP gift unseal error:', error);
+    return res.status(409).json({
+      success: false,
+      error: error.message || 'Impossible de desceller ce cadeau'
+    });
+  }
+});
+
+router.get('/admin/vip-invoices', isAdmin, async (req, res) => {
+  try {
+    const pool = getPool();
+    const result = await listVipInvoices(pool, {
+      status: req.query?.status ? String(req.query.status) : '',
+      search: req.query?.search ? String(req.query.search).trim() : '',
+      page: req.query?.page,
+      limit: req.query?.limit
+    });
+
+    return res.json({
+      success: true,
+      invoices: result.items,
+      total: result.total,
+      page: result.page,
+      limit: result.limit,
+      hasMore: result.hasMore
+    });
+  } catch (error) {
+    console.error('VIP admin invoices list error:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Impossible de récupérer les invoices VIP'
+    });
+  }
+});
+
+router.get('/admin/vip-invoices/:id', isAdmin, async (req, res) => {
+  try {
+    const pool = getPool();
+    const details = await getVipInvoiceDetails(pool, req.params.id);
+    if (!details) {
+      return res.status(404).json({
+        success: false,
+        error: 'Invoice introuvable'
+      });
+    }
+
+    return res.json({
+      success: true,
+      ...details
+    });
+  } catch (error) {
+    console.error('VIP admin invoice details error:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Impossible de récupérer cette invoice'
+    });
+  }
+});
+
+router.post('/admin/vip-invoices/:id/check', isAdmin, async (req, res) => {
+  try {
+    const pool = getPool();
+    const refreshedInvoice = await refreshInvoiceStatus(pool, req.params.id, {
+      force: true,
+      actorType: 'admin',
+      actorId: req.admin?.userId || null
+    });
+
+    if (!refreshedInvoice) {
+      return res.status(404).json({
+        success: false,
+        error: 'Invoice introuvable'
+      });
+    }
+
+    return res.json({
+      success: true,
+      invoice: serializeAdminInvoice(refreshedInvoice)
+    });
+  } catch (error) {
+    console.error('VIP admin invoice check error:', error);
+    return res.status(502).json({
+      success: false,
+      error: 'Vérification blockchain indisponible temporairement'
+    });
+  }
+});
+
+router.post('/admin/vip-invoices/:id/validate', isAdmin, async (req, res) => {
+  try {
+    const pool = getPool();
+    const invoice = await forceValidateInvoice(pool, req.params.id, req.admin);
+    return res.json({
+      success: true,
+      invoice: serializeAdminInvoice(invoice)
+    });
+  } catch (error) {
+    console.error('VIP admin invoice validate error:', error);
+    return res.status(409).json({
+      success: false,
+      error: error.message || 'Impossible de valider cette invoice'
+    });
+  }
+});
+
+router.post('/admin/vip-invoices/:id/cancel', isAdmin, async (req, res) => {
+  try {
+    const pool = getPool();
+    const invoice = await cancelInvoice(pool, req.params.id, req.admin);
+    return res.json({
+      success: true,
+      invoice: serializeAdminInvoice(invoice)
+    });
+  } catch (error) {
+    console.error('VIP admin invoice cancel error:', error);
+    return res.status(409).json({
+      success: false,
+      error: error.message || 'Impossible d\'annuler cette invoice'
+    });
+  }
+});
+
+module.exports = {
+  router,
+  ensureVipDonationsTables
+};

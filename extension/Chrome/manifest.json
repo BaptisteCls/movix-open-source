@@ -36,8 +36,6 @@
   "externally_connectable": {
     "matches": [
       "*://localhost/*",
-      "*://movix.blog/*",
-      "*://*.movix.blog/*",
       "*://movix.rodeo/*",
       "*://*.movix.rodeo/*",
       "*://movix.club/*",

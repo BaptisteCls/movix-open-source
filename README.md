@@ -1,69 +1,215 @@
-<div align="center">
+<p align="center">
+  <img src="./movix.png" alt="Movix" width="120" />
+</p>
 
-<img src="public/movix.png" alt="Movix OS" width="120" />
+<h1 align="center">Movix</h1>
 
-# Movix OS
+<p align="center">
+  <strong>Le 1er site de streaming open source made in France et 100% vibecodé.</strong>
+</p>
 
-**Le dépôt dédié aux outils navigateur Movix.**
+<p align="center">
+  <a href="https://react.dev">React</a> |
+  <a href="https://vite.dev">Vite</a> |
+  <a href="https://www.typescriptlang.org">TypeScript</a> |
+  <a href="https://nodejs.org">Node.js</a> |
+  <a href="https://www.mysql.com">MySQL</a> |
+  <a href="https://redis.io">Redis</a> |
+  <a href="https://socket.io">Socket.IO</a> |
+  <a href="https://www.python.org">Python</a> |
+  <a href="https://www.rust-lang.org">Rust</a>
+</p>
 
-[![Repository](https://img.shields.io/badge/GitHub-MysticSaba--max%2Fmovix--open--source-181717?style=flat&logo=github)](https://github.com/MysticSaba-max/movix-open-source)
-[![Extension](https://img.shields.io/badge/Movix-Extension-orange?style=flat)](extension/README.md)
-[![Userscript](https://img.shields.io/badge/Movix-Userscript-blue?style=flat)](userscript/README.md)
+<p align="center">
+  <a href="https://react.dev">
+    <img alt="React" src="https://img.shields.io/badge/React-149ECA?style=flat-square&logo=react&logoColor=white" />
+  </a>
+  <a href="https://vite.dev">
+    <img alt="Vite" src="https://img.shields.io/badge/Vite-7C3AED?style=flat-square&logo=vite&logoColor=white" />
+  </a>
+  <a href="https://www.typescriptlang.org">
+    <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white" />
+  </a>
+  <a href="https://nodejs.org">
+    <img alt="Node.js" src="https://img.shields.io/badge/Node.js-3C873A?style=flat-square&logo=nodedotjs&logoColor=white" />
+  </a>
+  <a href="https://www.mysql.com">
+    <img alt="MySQL" src="https://img.shields.io/badge/MySQL-005C84?style=flat-square&logo=mysql&logoColor=white" />
+  </a>
+  <a href="https://redis.io">
+    <img alt="Redis" src="https://img.shields.io/badge/Redis-D82C20?style=flat-square&logo=redis&logoColor=white" />
+  </a>
+  <a href="https://socket.io">
+    <img alt="Socket.IO" src="https://img.shields.io/badge/Socket.IO-010101?style=flat-square&logo=socketdotio&logoColor=white" />
+  </a>
+  <a href="https://www.python.org">
+    <img alt="Python" src="https://img.shields.io/badge/Python-3776AB?style=flat-square&logo=python&logoColor=white" />
+  </a>
+  <a href="https://www.rust-lang.org">
+    <img alt="Rust" src="https://img.shields.io/badge/Rust-000000?style=flat-square&logo=rust&logoColor=white" />
+  </a>
+</p>
 
-</div>
+Movix est un monorepo produit pour une plateforme de streaming communautaire. Le frontend, l'API principale, la WatchParty, les proxies, les outils navigateur et plusieurs briques d'infra vivent dans le même dépôt parce qu'ils évoluent ensemble.
 
----
+Ce n'est pas un simple duo "frontend + backend". Une feature peut très vite traverser plusieurs couches à la fois : interface React, persistance locale, sync backend, extraction vidéo, proxy Python et parfois extension navigateur.
 
-Movix OS regroupe les deux solutions navigateur de Movix pour débloquer les sources qui demandent une extraction locale ou des headers spécifiques :
+## Ce que contient le repo
 
-- l'extension Movix
-- le userscript Movix via Tampermonkey
+| Zone | Rôle | Documentation |
+| --- | --- | --- |
+| `src/` | Frontend Vite + React + TypeScript | [Frontend](src/README.md) |
+| `API/Mainapi/` | Backend principal clusterisé | [Main API](API/Mainapi/README.md) |
+| `API/watchpartyAPI/` | Service temps réel WatchParty | [WatchParty API](API/watchpartyAPI/README.md) |
+| `API/proxiesembed/` | Proxy aiohttp pour embeds, flux et DRM | [Proxies Embed](API/proxiesembed/README.md) |
+| `API/miscs/` | Micro-service Flask pour certains 403 | [bypass403](API/miscs/README.md) |
+| `extension/` + `userscript/` | Outils navigateur Movix | [Movix OS](README_MOVIX_OS.md) |
+| `wasm/watchparty-sync/` | Moteur Rust/WASM de la Sync Pro | [WatchParty Sync WASM](wasm/watchparty-sync/README.md) |
+| `cloudflareproxy/` | Worker Cloudflare CORS/proxy | [Cloudflare Proxy](cloudflareproxy/README.md) |
 
-## Documentation
-
-- [README Extension Movix](extension/README.md)
-- [README Userscript Movix](userscript/README.md)
-
-## Choisir la bonne option
-
-- **Firefox** : utilise de préférence l'[extension Movix](extension/README.md).
-- **Chrome / Edge / Brave** : utilise de préférence le [userscript Movix](userscript/README.md).
-- **Développement local** : les dossiers de l'extension et le script source sont inclus dans le dépôt.
-
-## Contenu du dépôt
+## Architecture du monorepo
 
 ```text
-movix-open-source/
-├── extension/    # Extension Firefox / Chrome
-└── userscript/   # Version Tampermonkey
+movix-main/
+|-- src/                        # Frontend principal
+|-- public/                     # Assets statiques et artefacts WASM publiés
+|-- API/
+|   |-- Mainapi/                # Backend actif
+|   |-- watchpartyAPI/          # Temps réel WatchParty
+|   |-- proxiesembed/           # Proxy Python haute charge
+|   `-- miscs/                  # Micro-services annexes
+|-- extension/                  # Extension Chrome / Firefox
+|-- userscript/                 # Variante Tampermonkey
+|-- wasm/watchparty-sync/       # Sync Pro en Rust/WASM
+|-- cloudflareproxy/            # Worker Cloudflare
+|-- functions/                  # Handlers serverless annexes
+|-- PreMid/                     # Présence PreMiD
+`-- RivestreamCloudflareProxy/  # Variante de worker pour Rivestream
 ```
 
-## Liens utiles
+## Démarrage rapide
 
-- [README Extension Movix](extension/README.md)
-- [README Userscript Movix](userscript/README.md)
-- [Installation directe de movix.user.js](https://github.com/MysticSaba-max/movix-open-source/raw/refs/heads/main/userscript/movix.user.js)
-- [Extension Firefox sur Add-ons](https://addons.mozilla.org/en-US/firefox/addon/movix-proxy-extension/)
+### Prérequis
 
-## Installation rapide
+- Node.js 18+ et npm
+- Python 3.10+ pour les services Python
+- MySQL et Redis pour `API/Mainapi`
+- Rust + `wasm-bindgen` seulement si tu touches la Sync Pro WASM
 
-### Extension
+### Installer les dépendances utiles
 
-Consulte le guide dédié :
+```bash
+npm install
+cd API/Mainapi
+npm install
+```
 
-- [extension/README.md](extension/README.md)
+`API/watchpartyAPI/` n'a pas son propre `package.json` : il consomme les dépendances du `node_modules` racine.
 
-### Userscript
+### Configurer les `.env` avant de lancer quoi que ce soit
 
-Consulte le guide dédié :
+Ne saute pas cette étape. Une bonne partie du monorepo dépend des variables d'environnement pour les URLs, la base de données, Redis, les proxys, TMDB, Turnstile et plusieurs intégrations de lecture.
 
-- [userscript/README.md](userscript/README.md)
+```bash
+# Frontend
+cp .env.example .env
 
-## Contribution
+# API principale
+cp API/Mainapi/.env.example API/Mainapi/.env
 
-Les contributions sont bienvenues pour :
+# WatchParty
+cp API/watchpartyAPI/.env.example API/watchpartyAPI/.env
 
-- améliorer l'extension
-- améliorer le userscript
-- corriger la documentation
-- simplifier l'installation
+# Proxy embed
+cp API/proxiesembed/.env.example API/proxiesembed/.env
+
+# bypass403
+cp API/miscs/.env.example API/miscs/.env
+```
+
+### Lancer le minimum utile en local
+
+```bash
+# Frontend - http://localhost:3000
+npm run dev
+```
+
+```bash
+# Backend principal - http://localhost:25565
+cd API/Mainapi
+npm run dev
+```
+
+```bash
+# WatchParty - http://localhost:25566
+node API/watchpartyAPI/watchparty.js
+```
+
+Services optionnels selon la zone que tu touches :
+
+```bash
+# Proxy embed
+cd API/proxiesembed
+pip install -r requirements.txt
+python server.py
+```
+
+```bash
+# bypass403
+cd API/miscs
+pip install flask requests python-dotenv
+python bypass403.py
+```
+
+## Configuration
+
+Les fichiers d'exemple ou de config existants sont déjà dans le repo :
+
+- Frontend : `.env.example`
+- API principale : `API/Mainapi/.env.example`
+- WatchParty : `API/watchpartyAPI/.env.example`
+- Proxy embed : `API/proxiesembed/.env.example`
+- bypass403 : `API/miscs/.env.example`
+
+Les variables frontend les plus importantes sont `VITE_MAIN_API`, `VITE_WATCHPARTY_API`, `VITE_PROXY_BASE_URL`, `VITE_API_PROXY_BASE_URL`, `VITE_PROXIES_EMBED_API` et `VITE_SITE_URL`.
+
+Pour un premier lancement local, configure au minimum :
+
+- `/.env`
+- `API/Mainapi/.env`
+- `API/watchpartyAPI/.env`
+
+## Comment s'orienter vite
+
+- Feature frontend : commence par `src/App.tsx`, puis la page cible dans `src/pages/`.
+- Auth, profils, persistance : regarde `src/context/`, `src/App.tsx`, `API/Mainapi/routes/authRoutes.js` et `API/Mainapi/routes/sync.js`.
+- Lecture vidéo et proxies : recoupe `src/pages/Watch/`, les composants player, `API/Mainapi/liveTvRoutes.js`, `API/proxiesembed/` et parfois `extension/`.
+- WatchParty : vérifie à la fois `API/watchpartyAPI/watchparty.js`, `src/pages/WatchParty*.tsx`, `src/hooks/useWatchParty.ts`, `src/utils/watchparty*.ts` et `src/workers/watchpartySync.worker.ts`.
+- Browser tooling : si tu modifies l'extension, compare toujours `extension/Chrome/` et `extension/Firefox/`, puis vérifie si le userscript doit suivre.
+- Sync Rust/WASM : modifie `wasm/watchparty-sync/`, puis rebuild `public/wasm/watchparty-sync/`.
+
+## Points importants avant de contribuer
+
+- Le backend actif est `API/Mainapi/`. Le vieux contenu directement sous `API/` n'est plus la référence.
+- Ce monorepo n'utilise pas de workspace tooling : chaque sous-projet garde ses scripts.
+- Une partie importante de l'état produit vit dans `localStorage` et dans la sync backend. Ne raisonne pas "base de données only".
+- Le lint frontend se lance à la racine avec `npm run lint`.
+- Il n'y a pas de suite de tests globale fiable pour tout le repo. Vérifie au minimum les scripts touchés et le comportement manuel.
+
+## Documentation par module
+
+- [Frontend](src/README.md)
+- [Services backend](API/README.md)
+- [Main API](API/Mainapi/README.md)
+- [WatchParty API](API/watchpartyAPI/README.md)
+- [Proxies Embed](API/proxiesembed/README.md)
+- [bypass403](API/miscs/README.md)
+- [Movix OS](README_MOVIX_OS.md)
+- [Extension navigateur](extension/README.md)
+- [Userscript Tampermonkey](userscript/README.md)
+- [WatchParty Sync WASM](wasm/watchparty-sync/README.md)
+- [Cloudflare Proxy](cloudflareproxy/README.md)
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=MysticSaba-max/movix-open-source&type=Timeline)](https://star-history.com/#MysticSaba-max/movix-open-source&Timeline)

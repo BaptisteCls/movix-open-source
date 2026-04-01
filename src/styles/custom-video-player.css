@@ -1,0 +1,524 @@
+/* Theme MOVIX pour le lecteur video.js */
+.video-container {
+  max-width: 100%;
+  margin: 0 auto;
+  background-color: #141414;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
+  --video-primary: #e50914;
+  --video-secondary: #ffffff;
+  --video-background: rgba(0, 0, 0, 0.9);
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  margin-bottom: 80px;
+  padding-top: 56px;
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: #000;
+  aspect-ratio: 16/9;
+}
+
+.video-js {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16/9;
+  font-family: 'Netflix Sans', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  cursor: pointer;
+}
+
+/* Bouton play principal */
+.vjs-big-play-button {
+  background-color: rgba(229, 9, 20, 0.8) !important;
+  border: none !important;
+  border-radius: 50% !important;
+  width: 80px !important;
+  height: 80px !important;
+  line-height: 80px !important;
+  transition: transform 0.2s ease, background-color 0.2s ease !important;
+}
+
+.vjs-big-play-button:hover {
+  background-color: rgb(229, 9, 20) !important;
+  transform: scale(1.1) !important;
+}
+
+/* Barre de contrôle */
+.video-js .vjs-control-bar {
+  background: linear-gradient(0deg, rgba(0,0,0,0.9) 0%, rgba(0,0,0,0.7) 100%);
+  height: 4em;
+  padding: 0 1em;
+  pointer-events: auto !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+  display: flex !important;
+}
+
+.video-js .vjs-control-bar * {
+  pointer-events: auto !important;
+}
+
+/* Boutons de contrôle */
+.video-js .vjs-button {
+  width: 3em;
+  height: 3em;
+  margin: 0.5em 0.2em;
+}
+
+.video-js .vjs-button:hover {
+  color: #e50914;
+  transform: scale(1.1);
+}
+
+/* Barre de progression */
+.video-js .vjs-progress-control {
+  position: absolute;
+  top: -1em;
+  right: 0;
+  left: 0;
+  width: 100%;
+  height: 0.6em;
+  transition: height 0.2s ease;
+}
+
+.video-js .vjs-progress-control:hover {
+  height: 1em;
+}
+
+.video-js .vjs-progress-holder {
+  height: 100%;
+  background-color: rgba(255, 255, 255, 0.2);
+}
+
+.video-js .vjs-play-progress {
+  background: linear-gradient(90deg, #e50914 0%, #ff0f1f 100%);
+}
+
+.video-js .vjs-play-progress:before {
+  content: '';
+  background: #fff;
+  border-radius: 50%;
+  width: 1em;
+  height: 1em;
+  top: -0.2em;
+  right: -0.5em;
+  box-shadow: 0 0 5px rgba(0,0,0,0.5);
+}
+
+/* Volume */
+.video-js .vjs-volume-panel {
+  width: 8em;
+}
+
+.video-js .vjs-volume-control {
+  width: 6em;
+}
+
+.video-js .vjs-volume-level {
+  background: linear-gradient(90deg, #e50914 0%, #ff0f1f 100%);
+}
+
+/* Temps */
+.video-js .vjs-time-control {
+  font-size: 1.1em;
+  padding: 0 0.5em;
+}
+
+/* Menu des sous-titres et qualité */
+.vjs-menu-button-popup .vjs-menu {
+  background: rgba(28, 28, 28, 0.9);
+  border-radius: 8px;
+  padding: 0.5em;
+}
+
+.vjs-menu-item {
+  border-radius: 4px;
+  transition: all 0.2s ease;
+}
+
+.vjs-menu-item:hover,
+.vjs-menu-item.vjs-selected {
+  background-color: #e50914 !important;
+  text-shadow: none;
+}
+
+/* Plein écran */
+.video-js .vjs-fullscreen-control {
+  margin-right: 0;
+}
+
+/* Animation du loader */
+.vjs-loading-spinner {
+  border: 3px solid rgba(229, 9, 20, 0.25);
+  border-top-color: #e50914;
+  animation: vjs-spinner-spin 1s infinite linear;
+}
+
+@keyframes vjs-spinner-spin {
+  100% { transform: rotate(360deg); }
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .vjs-big-play-button {
+    width: 60px !important;
+    height: 60px !important;
+    line-height: 60px !important;
+  }
+
+  .video-js .vjs-control-bar {
+    height: 3.5em;
+    padding: 0 0.5em;
+  }
+
+  .video-js .vjs-button {
+    width: 2.5em;
+    height: 2.5em;
+    margin: 0.5em 0.2em;
+  }
+
+  .video-js .vjs-fullscreen-control {
+    display: flex !important;
+    align-items: center;
+    justify-content: center;
+    margin-right: 0.5em;
+  }
+
+  .video-container {
+    margin-bottom: 100px;
+    padding-bottom: 20px;
+  }
+}
+
+@media (min-width: 768px) {
+  .video-container {
+    padding-top: 0;
+  }
+}
+
+input[type="range"] {
+  -webkit-appearance: none;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.3);
+  border-radius: 2px;
+  background-image: linear-gradient(var(--video-primary), var(--video-primary));
+  background-size: 70% 100%;
+  background-repeat: no-repeat;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 0;
+  height: 0;
+}
+
+input[type="range"]::-moz-range-thumb {
+  width: 0;
+  height: 0;
+  border: 0;
+}
+
+input[type="range"]::-ms-thumb {
+  width: 0;
+  height: 0;
+}
+
+input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.2);
+  background: var(--video-secondary);
+}
+
+.video-controls-button {
+  @apply p-2 rounded-full transition-all duration-300;
+}
+
+.video-controls-button:hover {
+  @apply bg-red-600/20 transform scale-110;
+}
+
+.progress-bar {
+  @apply relative h-1 bg-gray-600 rounded-full cursor-pointer mb-4 overflow-hidden;
+}
+
+.progress-bar::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(90deg, 
+    rgba(229, 9, 20, 0.2) 0%,
+    rgba(229, 9, 20, 0.1) 100%
+  );
+  transform: translateX(-100%);
+  animation: shimmer 2s infinite;
+}
+
+@keyframes shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+/* Contrôles personnalisés */
+.custom-controls {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: linear-gradient(0deg, rgba(0,0,0,0.9) 0%, transparent 100%);
+  padding: 20px;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.video-container:hover .custom-controls {
+  opacity: 1;
+}
+
+/* Barre de progression */
+.progress-bar {
+  position: relative;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.3);
+  cursor: pointer;
+  transition: height 0.2s ease;
+}
+
+.progress-bar:hover {
+  height: 6px;
+}
+
+.progress-filled {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  background: var(--video-primary);
+  transition: width 0.1s ease-in-out;
+}
+
+.progress-buffered {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  background: rgba(255, 255, 255, 0.4);
+}
+
+/* Boutons de contrôle */
+.control-button {
+  background: none;
+  border: none;
+  color: var(--video-secondary);
+  cursor: pointer;
+  padding: 8px;
+  transition: all 0.2s ease;
+}
+
+.control-button:hover {
+  color: var(--video-primary);
+  transform: scale(1.1);
+}
+
+/* Loader */
+.video-loader {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 40px;
+  height: 40px;
+  border: 3px solid rgba(255, 255, 255, 0.3);
+  border-top-color: var(--video-primary);
+  border-radius: 50%;
+  animation: loader-spin 1s infinite linear;
+}
+
+@keyframes loader-spin {
+  100% { transform: translate(-50%, -50%) rotate(360deg); }
+}
+
+/* Overlay de titre */
+.title-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  padding: 20px;
+  background: linear-gradient(180deg, rgba(0,0,0,0.9) 0%, transparent 100%);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.video-container:hover .title-overlay {
+  opacity: 1;
+}
+
+/* Menu des paramètres */
+.settings-menu {
+  position: absolute;
+  bottom: 60px;
+  right: 10px;
+  background: var(--video-background);
+  border-radius: 4px;
+  padding: 8px 0;
+  min-width: 200px;
+  transform-origin: bottom right;
+  transform: scale(0.95);
+  opacity: 0;
+  visibility: hidden;
+  transition: all 0.2s ease;
+}
+
+.settings-menu.active {
+  transform: scale(1);
+  opacity: 1;
+  visibility: visible;
+}
+
+.settings-item {
+  padding: 8px 16px;
+  color: var(--video-secondary);
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+}
+
+.settings-item:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+/* Aperçu de la vidéo */
+.preview-thumbnail {
+  position: absolute;
+  bottom: 40px;
+  transform: translateX(-50%);
+  background: var(--video-background);
+  border-radius: 4px;
+  overflow: hidden;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.2s ease;
+}
+
+.preview-thumbnail.visible {
+  opacity: 1;
+  visibility: visible;
+}
+
+.preview-thumbnail video {
+  width: 160px;
+  height: 90px;
+  object-fit: cover;
+}
+
+.preview-thumbnail .time {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: rgba(0, 0, 0, 0.7);
+  color: white;
+  font-size: 12px;
+  padding: 2px 4px;
+  text-align: center;
+}
+
+video {
+  cursor: pointer;
+}
+
+.vjs-control-bar {
+  pointer-events: auto !important;
+}
+
+.vjs-control-bar * {
+  pointer-events: auto !important;
+  z-index: 2;
+}
+
+.video-js .vjs-tech {
+  pointer-events: auto !important;
+}
+
+.video-container video {
+  cursor: pointer;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  margin: auto;
+}
+
+.video-container video:active {
+  cursor: grabbing;
+}
+
+/* Empêcher la sélection du texte lors du double-clic */
+.video-container {
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+}
+
+/* Pour forcer le ratio 16:9 */
+.video-aspect-ratio {
+  position: relative;
+  padding-bottom: 56.25%; /* 16:9 */
+  height: 0;
+  overflow: hidden;
+}
+
+.video-aspect-ratio video {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.video-container:fullscreen {
+  background: black;
+  width: 100vw;
+  height: 100vh;
+}
+
+.video-container:fullscreen video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+/* Style pour le bouton plein écran */
+.fullscreen-button {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  background: none;
+  border: none;
+  color: white;
+  cursor: pointer;
+  padding: 8px;
+  transition: all 0.2s ease;
+}
+
+.fullscreen-button:hover {
+  transform: scale(1.1);
+}
+
+/* Amélioration de la visibilité des contrôles */
+.video-container:hover .vjs-control-bar,
+.video-container.touch-device .vjs-control-bar {
+  opacity: 1 !important;
+  visibility: visible !important;
+  transform: translateY(0);
+} 

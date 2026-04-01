@@ -1,35 +1,40 @@
-<div align="center">
-
-<img src="../public/movix.png" alt="Movix" width="120" />
-
 # Userscript Movix
 
-**Version Tampermonkey de l'extension Movix.**
+Le userscript Movix est la variante Tampermonkey de l'outillage navigateur. Il reprend la logique utile pour les navigateurs Chromium quand l'installation d'une extension locale n'est pas l'option la plus pratique.
 
-[![Tampermonkey](https://img.shields.io/badge/Tampermonkey-Install-blue?style=flat&logo=tampermonkey&logoColor=white)](https://www.tampermonkey.net/)
-[![Installer movix.user.js](https://img.shields.io/badge/movix.user.js-Installation%20directe-orange?style=flat)](https://github.com/MysticSaba-max/movix-open-source/raw/refs/heads/main/userscript/movix.user.js)
+Le fichier installé est `userscript/movix.user.js`.
 
-</div>
+## Quand choisir le userscript
 
----
+- si tu es sur Chrome, Edge ou Brave et que tu veux une installation rapide
+- si tu préfères Tampermonkey à une extension non empaquetée
+- si tu veux retrouver une partie du comportement de l'extension sans passer par un store
 
-Le userscript Movix permet d'utiliser le mode extension directement via **Tampermonkey**, sans passer par le Chrome Web Store. Il reprend la logique utile pour l'extraction locale, les headers requis par certains hosters et l'intégration avec le front Movix.
+Sur Firefox, l'extension native reste généralement le choix le plus propre.
 
-## Installation rapide
+## Installation
 
-1. [Installer Tampermonkey](https://www.tampermonkey.net/)
-2. [Installer directement `movix.user.js`](https://github.com/MysticSaba-max/movix-open-source/raw/refs/heads/main/userscript/movix.user.js)
-3. Installer `movix.user.js` dans Tampermonkey puis recharger Movix
+1. Installe [Tampermonkey](https://www.tampermonkey.net/).
+2. Ouvre [`movix.user.js`](./movix.user.js).
+3. Utilise le bouton `Raw` ou l'équivalent de ta forge pour lancer l'installation.
+4. Recharge Movix.
 
-## Liens utiles
+## Ce que le script fait
 
-- [Page officielle Tampermonkey](https://www.tampermonkey.net/)
-- [Installation directe `movix.user.js`](https://github.com/MysticSaba-max/movix-open-source/raw/refs/heads/main/userscript/movix.user.js)
-- [Userscript local `movix.user.js`](./movix.user.js)
-- [Version servie par le site en local](../public/userscript/movix.user.js)
+- expose une couche de compatibilité navigateur proche de l'extension
+- s'appuie sur `GM_xmlhttpRequest` et le stockage Tampermonkey
+- reproduit une partie des mécanismes de réécriture de requêtes et d'extraction locale
+- se charge très tôt dans la page (`document-start`)
 
-## Fichiers
+## Fichiers à connaître
 
 | Fichier | Rôle |
-|-|-|
-| [`movix.user.js`](./movix.user.js) | Userscript prêt à installer dans Tampermonkey |
+| --- | --- |
+| `movix.user.js` | Script installable dans Tampermonkey |
+| `../public/userscript/movix.user.js` | Variante servie par le frontend quand nécessaire |
+
+## Notes de contribution
+
+- Le fichier versionné ici est le livrable installé.
+- Si tu touches une feature partagée avec l'extension, vérifie aussi `extension/Chrome/` et `extension/Firefox/`.
+- Les métadonnées `@match`, `@grant` et `@connect` sont aussi importantes que la logique JS elle-même.

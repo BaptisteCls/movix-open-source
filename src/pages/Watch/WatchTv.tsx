@@ -1,0 +1,6136 @@
+﻿import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useParams, useNavigate } from 'react-router-dom'; // Added useNavigate
+import { useTranslation } from 'react-i18next';
+import axios from 'axios';
+import HLSPlayer from '../../components/HLSPlayer';
+import { motion, AnimatePresence } from 'framer-motion';
+import { useAdFreePopup } from '../../context/AdFreePopupContext';
+import AdFreePlayerAds from '../../components/AdFreePlayerAds';
+import { extractM3u8FromEmbed, extractVoeM3u8, extractUqloadFile, extractDarkiboxSources, extractVidzyM3u8, extractFsvidM3u8, extractOneUploadSources, isOneUploadEmbed, isVoeEmbed, extractVidmolyM3u8, extractDoodStreamFile, extractSeekStreamingM3u8, isDoodStreamEmbed, isSeekStreamingEmbed, DOODSTREAM_EXTRACTIONS_ENABLED, SEEKSTREAMING_EXTRACTIONS_ENABLED, type M3u8Result } from '../../utils/extractM3u8';
+import { getTmdbId, encodeId } from '../../utils/idEncoder';
+import { useAntiSpoilerSettings } from '../../hooks/useAntiSpoilerSettings';
+import { generateRivestreamSecretKey } from '../../utils/rivestreamSecretKey';
+import { useWrappedTracker } from '../../hooks/useWrappedTracker';
+import { isUserVip, getVipHeaders } from '../../utils/authUtils';
+import { RIVESTREAM_PROXIES } from '../../config/rivestreamProxy';
+import { buildProxyUrl } from '../../config/runtime';
+import { getTmdbLanguage } from '../../i18n';
+import { useProfile } from '../../context/ProfileContext';
+import { isContentAllowed, getClassificationLabel } from '../../utils/certificationUtils';
+import { getCoflixPreferredUrl } from '../../utils/coflix';
+
+
+const MAIN_API = import.meta.env.VITE_MAIN_API;
+const TMDB_API_KEY = import.meta.env.VITE_TMDB_API_KEY || '';
+
+// Constante pour contrôler la vérification VIP pour Rivestream
+const ENABLE_RIVESTREAM_VIP_CHECK = false;
+
+// Helper function to check if Rivestream is available (VIP check if enabled)
+const isRivestreamAvailable = (): boolean => {
+  if (!ENABLE_RIVESTREAM_VIP_CHECK) {
+    return true; // Si la vérification VIP est désactivée, Rivestream est toujours disponible
+  }
+  return isUserVip();
+};
+
+// Helper function to generate proxy URL for fsvid sources
+const getProxyUrl = (url: string): string => {
+  if (url.toLowerCase().includes('fsvid')) {
+    return buildProxyUrl(url);
+  }
+  return url;
+};
+
+const normalizeUqloadEmbedUrl = (url: string): string => {
+  return url
+    .replace(/uqload\.bz/gi, 'uqload.is')
+    .replace(/uqload%2ebz/gi, 'uqload%2eis');
+};
+
+// Interfaces
+interface TVShow {
+  name: string;
+  overview: string;
+  poster_path: string;
+  first_air_date: string;
+  vote_average: number;
+  genres: { id: number; name: string }[];
+  episode_run_time?: number[];
+  backdrop_path?: string;
+}
+
+interface EpisodeDetails {
+  name: string;
+  overview: string;
+  air_date: string;
+  still_path?: string | null;
+  vote_average: number;
+  episode_number: number;
+  season_number: number;
+}
+
+interface NextEpisodeType {
+  season_number: number;
+  episode_number: number;
+  name: string;
+  overview: string;
+  air_date: string;
+  vote_average: number;
+  still_path?: string | null;
+  show_id: number;
+  show_name: string;
+}
+
+interface OmegaTvEpisodeResponse {
+  players: Array<{ player: string; link: string; is_hd?: boolean }>;
+}
+
+interface CoflixTvEpisodeResponse {
+  iframe_src?: string;
+  player_links?: Array<{ decoded_url: string; clone_url?: string; quality: string; language: string }>;
+  current_episode?: {
+    iframe_src?: string;
+    player_links?: Array<{ decoded_url: string; clone_url?: string; quality: string; language: string }>;
+    season_number?: number;
+    episode_number?: number;
+    title?: string;
+  };
+}
+
+// Interface pour FStream TV
+interface FStreamTvResponse {
+  success: boolean;
+  source: string;
+  type: string;
+  tmdb: {
+    id: number;
+    title: string;
+    original_title: string;
+    release_date: string;
+    overview: string;
+  };
+  search: {
+    query: string;
+    results: number;
+    bestMatch: any;
+  };
+  episodes: {
+    [episodeNumber: string]: {
+      number: number;
+      title: string;
+      languages: {
+        VF?: Array<{
+          url: string;
+          type: string;
+          quality: string;
+          player: string;
+        }>;
+        VOSTFR?: Array<{
+          url: string;
+          type: string;
+          quality: string;
+          player: string;
+        }>;
+        VOENG?: Array<{
+          url: string;
+          type: string;
+          quality: string;
+          player: string;
+        }>;
+        Default?: Array<{
+          url: string;
+          type: string;
+          quality: string;
+          player: string;
+        }>;
+      };
+    };
+  };
+  total: number;
+  metadata: {
+    season: number;
+    episode: number;
+    extractedAt: string;
+  };
+}
+
+
+
+// Interface pour la source Wiflix TV (Lynx)
+interface WiflixTvResponse {
+  success: boolean;
+  tmdb_id: string;
+  title: string;
+  original_title: string;
+  season: number;
+  wiflix_url: string;
+  episodes: {
+    [episodeNumber: string]: {
+      vf: Array<{
+        name: string;
+        url: string;
+        episode: number;
+        type: string;
+      }>;
+      vostfr: Array<{
+        name: string;
+        url: string;
+        episode: number;
+        type: string;
+      }>;
+    };
+  };
+  cache_timestamp: string;
+}
+
+// Interface pour Rivestream VO/VOSTFR HLS
+interface RivestreamResponse {
+  data?: {
+    sources?: Array<{
+      quality: number | string;
+      url: string;
+      source: string;
+      size?: string;
+      format?: string;
+    }>;
+    captions?: Array<{
+      label: string;
+      file: string;
+    }>;
+  };
+}
+
+interface ViperTvResponse {
+  links: {
+    vf: Array<{ server: string; url: string }>;
+    vostfr: Array<{ server: string; url: string }>;
+  };
+}
+
+interface VoxTvResponse {
+  success: boolean;
+  data: Array<{
+    name: string;
+    link: string;
+  }>;
+  tmdbId: string;
+  season: string;
+  episode: string;
+}
+
+// Interface pour les saisons
+interface Season {
+  id: number;
+  name: string;
+  season_number: number;
+  episode_count: number;
+  poster_path?: string | null;
+  overview?: string;
+}
+
+// Interface pour les épisodes dans l'affichage du menu
+interface EpisodeInfo {
+  id: number;
+  name: string;
+  episode_number: number;
+  air_date?: string;
+  overview?: string;
+  still_path?: string | null;
+  vote_average?: number;
+}
+
+type PlayerSourceType = 'darkino' | 'mp4' | 'm3u8' | 'frembed' | 'custom' | 'vostfr' | 'omega' | 'coflix' | 'fstream' | 'wiflix' | 'viper' | 'vox' | string | number; // Allow string for embed types
+
+function formatPremidSourceDetail(...parts: Array<string | null | undefined>) {
+  const normalizedParts = parts
+    .map(part => (typeof part === 'string' ? part.trim() : ''))
+    .filter(Boolean)
+    .filter((part, index, array) =>
+      array.findIndex(entry => entry.toLowerCase() === part.toLowerCase()) === index
+    );
+
+  return normalizedParts.length > 0 ? normalizedParts.join(' - ') : undefined;
+}
+
+
+// --- Helper functions adapted from TVDetails.tsx ---
+
+// Check Custom Links from MySQL API for TV Episodes
+const checkCustomTVLink = async (showId: string, seasonNumber: number, episodeNumber: number) => {
+  const customLinks: string[] = [];
+  const mp4Links: { url: string; label?: string; language?: string; isVip?: boolean }[] = [];
+  let isAvailable = false;
+
+  try {
+    const response = await axios.get(`${MAIN_API}/api/links/tv/${showId}`, {
+      params: { season: seasonNumber, episode: episodeNumber }
+    });
+
+    // For TV series, data is an array, not an object
+    if (response.data && response.data.success && response.data.data && Array.isArray(response.data.data) && response.data.data.length > 0) {
+      const episodeData = response.data.data[0]; // Get first episode from array
+      const rawLinks = episodeData.links || [];
+      const uniqueUrls = new Set<string>();
+
+      console.log('Raw API TV links:', rawLinks);
+
+      rawLinks.forEach((item: any) => {
+        let urlToAdd: string | null = null;
+        let label = "HD+";
+        let language = 'FR';
+        let isVip = false;
+
+        if (typeof item === 'string') {
+          urlToAdd = item;
+        } else if (typeof item === 'object' && item !== null && typeof item.url === 'string') {
+          urlToAdd = item.url;
+          label = item.label || "Viblix";
+          language = item.language || language;
+          isVip = item.isVip || isVip;
+        }
+
+        if (urlToAdd) {
+          isAvailable = true;
+          if (urlToAdd.toLowerCase().endsWith('.mp4')) {
+            if (!uniqueUrls.has(urlToAdd)) {
+              uniqueUrls.add(urlToAdd);
+              mp4Links.push({ url: urlToAdd, label, language, isVip });
+            }
+          } else {
+            if (!customLinks.includes(urlToAdd)) {
+              customLinks.push(urlToAdd);
+            }
+          }
+        }
+      });
+
+      console.log('Processed API TV links - customLinks:', customLinks, 'mp4Links:', mp4Links);
+    }
+  } catch (error) {
+    console.error('Error fetching custom TV links from API:', error);
+  }
+
+  return { isAvailable, customLinks, mp4Links };
+};
+
+
+// Check Frembed Availability for Episodes
+const checkFrembedAvailability = async (showId: string, seasonNumber: number, episodeNumber: number): Promise<boolean> => {
+  try {
+    const checkUrl = `https://frembed.bond/api/public/v1/tv/${showId}?sa=${seasonNumber}&epi=${episodeNumber}`;
+    const response = await axios.get(checkUrl, { timeout: 1000 });
+
+    // Check status and if result has items
+    return response.data?.status === 200 && response.data?.result?.totalItems > 0;
+
+  } catch (error: any) {
+    // console.error('Frembed Check Error:', error.message);
+    // If the check endpoint fails (e.g., 404), assume unavailable
+    return false;
+  }
+};
+
+// New function to check if an episode exists in Omega data
+const checkOmegaAvailability = (omegaData: any, seasonNumber: number, episodeNumber: number): boolean => {
+  if (!omegaData || !omegaData.type || omegaData.type !== 'tv' || !omegaData.series || !omegaData.series.length) {
+    return false;
+  }
+
+  try {
+    const series = omegaData.series[0];
+    const season = series.seasons?.find((s: { number: number }) => s.number === seasonNumber);
+    if (!season) return false;
+
+    const episode = season.episodes?.find((e: { number: string }) =>
+      e.number === episodeNumber.toString());
+
+    // Check if episode exists and has playable sources
+    return !!episode &&
+      !!episode.versions &&
+      ((!!episode.versions.vf && !!episode.versions.vf.players && episode.versions.vf.players.length > 0) ||
+        (!!episode.versions.vostfr && !!episode.versions.vostfr.players && episode.versions.vostfr.players.length > 0));
+  } catch (error) {
+    console.error('Error checking Omega availability:', error);
+    return false;
+  }
+};
+
+// Check Darkino Availability for TV Episodes (Adapted from TVDetails)
+const checkDarkinoAvailability = async (
+  showTitle: string,
+  releaseYear: number,
+  seasonNumber: number,
+  episodeNumber: number,
+  showId: string,
+  updateRetryMessage?: (message: string) => void,
+  retryCount = 0
+) => {
+  const retryMessages = [
+    "Finalisation de la recherche premium...",
+    "Préparation de la source Nightflix VIP...",
+    "Vérification des accès sécurisés...",
+    "Optimisation de la connexion VIP..."
+  ];
+
+  try {
+    const searchResponse = await axios.get(`${MAIN_API}/api/search`, {
+      params: { title: showTitle }
+    });
+
+    if (!searchResponse.data.results || searchResponse.data.results.length === 0) {
+      return false;
+    }
+
+    // Match only by tmdb_id (exact match)
+    const matchingShow = searchResponse.data.results.find((result: any) => {
+      return (result.type === 'series' || result.type === 'animes' || result.type === 'doc') &&
+        result.tmdb_id &&
+        String(result.tmdb_id) === String(showId);
+    });
+
+    if (!matchingShow) {
+      return false;
+    }
+
+    try {
+      const downloadResponse = await axios.get(
+        `${MAIN_API}/api/series/download/${matchingShow.id}/season/${seasonNumber}/episode/${episodeNumber}`
+      );
+
+      if (downloadResponse.data && downloadResponse.data.sources && downloadResponse.data.sources.length > 0) {
+        const m3u8Sources = downloadResponse.data.sources.filter((source: any) => source.m3u8);
+        if (m3u8Sources.length > 0) {
+          return { available: true, sources: m3u8Sources, darkinoId: matchingShow.id };
+        }
+      }
+      return false;
+    } catch (downloadError: any) {
+      // Don't retry if error is 500 (server error)
+      if (downloadError.response && downloadError.response.status === 500) {
+        console.error('[Darkino Download] Server error (500), not retrying:', downloadError.message);
+        return false;
+      }
+      throw downloadError; // Re-throw other errors to be caught by the main catch block
+    }
+
+  } catch (error: any) {
+    console.error('[Darkino Check] Error:', error.message);
+
+    // Don't retry if error is 500 (server error)
+    if (error.response && error.response.status === 500) {
+      console.error('[Darkino Check] Server error (500), not retrying:', error.message);
+      return false;
+    }
+
+    if (retryCount < 3) {
+      if (updateRetryMessage) updateRetryMessage(retryMessages[retryCount % retryMessages.length]);
+      await new Promise(resolve => setTimeout(resolve, 1000 * (retryCount + 1)));
+      return checkDarkinoAvailability(showTitle, releaseYear, seasonNumber, episodeNumber, showId, updateRetryMessage, retryCount + 1);
+    }
+    return false;
+  }
+};
+
+// Format TV show title for cinefocus URL
+const formatTvShowTitleForUrl = (title: string): string => {
+  return title
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // Replace accented chars with non-accented versions
+    .replace(/'/g, '') // Remove apostrophes
+    .replace(/:/g, '') // Remove colons
+    .replace(/\s+/g, '-') // Replace spaces with hyphens
+    .replace(/[^\w-]/g, ''); // Remove special characters except hyphens
+};
+
+// Check sibnet availability for anime
+const checkSibnetAvailability = async (videoId: string): Promise<string | null> => {
+  if (!videoId) return null;
+
+  try {
+    const response = await axios.get(`https://colossal-latrina-movixfrembedapi-acb05587.koyeb.app/api/extract-sibnet?url=https:%2F%2Fvideo.sibnet.ru%2Fshell.php%3Fvideoid%3D${videoId}`);
+
+    if (response.data && response.data.url) {
+      // Replace dv98 with cvs123-1 as requested
+      const modifiedUrl = response.data.url.replace('dv98.sibnet.ru', 'cvs123-1.sibnet.ru');
+      return modifiedUrl;
+    }
+  } catch (error) {
+    console.error('Error extracting sibnet URL:', error);
+  }
+
+  return null;
+};
+
+// Check Vox Availability
+const checkVoxAvailability = async (
+  tmdbId: string,
+  season: number,
+  episode: number
+): Promise<VoxTvResponse | null> => {
+  try {
+    const response = await axios.get(`${MAIN_API}/api/drama/tv/${tmdbId}`, {
+      params: { season, episode }
+    });
+
+    if (response.data && response.data.success && response.data.data && response.data.data.length > 0) {
+      return response.data;
+    }
+  } catch (error) {
+    console.error('Error checking Vox availability:', error);
+  }
+  return null;
+};
+
+// --- Main Component ---
+const WatchTv: React.FC = () => {
+  const { tmdbid: encodedId, season: seasonParam, episode: episodeParam } = useParams<{ tmdbid: string; season: string; episode: string }>();
+  const id = encodedId ? getTmdbId(encodedId) : null;
+  const navigate = useNavigate(); // Hook for navigation
+  const { currentProfile } = useProfile();
+
+  const { t } = useTranslation();
+
+  // Ensure IDs are valid before parsing
+  const seasonNumber = parseInt(seasonParam || '1', 10);
+  const episodeNumber = parseInt(episodeParam || '1', 10);
+
+  const [isLoading, setIsLoading] = useState(true);
+  const [contentCert, setContentCert] = useState<string>('');
+  const [isBlocked, setIsBlocked] = useState(false);
+  const [loadingText, setLoadingText] = useState(t('watch.loadingSources'));
+  const [showTitle, setShowTitle] = useState<string>('');
+  const [episodeTitle, setEpisodeTitle] = useState<string>('');
+  const [releaseYear, setReleaseYear] = useState<number | null>(null);
+  const [backdropPath, setBackdropPath] = useState<string | null>(null);
+  const [episodeStillPath, setEpisodeStillPath] = useState<string | null>(null);
+  const [showPosterPath, setShowPosterPath] = useState<string | null>(null); // Store poster for progress saving
+
+  // Anti-spoiler settings
+  const { shouldHide, getMaskedContent } = useAntiSpoilerSettings();
+
+  // Source states
+  const [selectedSource, setSelectedSource] = useState<PlayerSourceType | null>(null);
+  const [customSources, setCustomSources] = useState<string[]>([]);
+  const [frembedAvailable, setFrembedAvailable] = useState(true);
+  const [adFreeM3u8Url, setAdFreeM3u8Url] = useState<string | null>(null); // Keep for potential future use
+  const [coflixData, setCoflixData] = useState<CoflixTvEpisodeResponse | null>(null);
+  const [omegaData, setOmegaData] = useState<OmegaTvEpisodeResponse | null>(null);
+  const [darkinoAvailable, setDarkinoAvailable] = useState(false);
+  const [darkinoSources, setDarkinoSources] = useState<any[]>([]);
+  const [darkinoShowId, setDarkinoShowId] = useState<string | null>(null);
+  const [selectedDarkinoSource, setSelectedDarkinoSource] = useState<number>(0);
+  const [mp4Sources, setMp4Sources] = useState<{ url: string; label?: string; language?: string; isVip?: boolean }[]>([]);
+  const [selectedMp4Source, setSelectedMp4Source] = useState<number>(0);
+  const [watchProgress, setWatchProgress] = useState<number>(0); // Used to set initial HLSPlayer time
+  const [loadingError, setLoadingError] = useState<boolean>(false);
+  const [nextEpisodeData, setNextEpisodeData] = useState<NextEpisodeType | null>(null);
+  const [loadingNextEpisode, setLoadingNextEpisode] = useState<boolean>(false);
+
+  // Loading states for individual source types
+  const [loadingDarkino, setLoadingDarkino] = useState(true);
+  const [loadingCoflix, setLoadingCoflix] = useState(true);
+  const [loadingOmega, setLoadingOmega] = useState(true);
+  const [loadingCustom, setLoadingCustom] = useState(true);
+  const [loadingSibnet, setLoadingSibnet] = useState(false);
+  const [loadingFrembed, setLoadingFrembed] = useState(true);
+
+  const [loadingExtractions, setLoadingExtractions] = useState(true); // Nouvel état pour les extractions
+  const [vipRetryMessage, setVipRetryMessage] = useState<string | null>(null);
+  const [onlyVostfrAvailable, setOnlyVostfrAvailable] = useState<boolean>(false);
+
+
+
+  // FStream source states
+  const [fstreamData, setFstreamData] = useState<FStreamTvResponse | null>(null);
+  const [fstreamSources, setFstreamSources] = useState<{ url: string; label: string; category: string }[]>([]);
+  const [selectedFstreamSource, setSelectedFstreamSource] = useState<number>(0);
+  const [loadingFstream, setLoadingFstream] = useState(true);
+
+  // Wiflix source states
+  const [wiflixData, setWiflixData] = useState<WiflixTvResponse | null>(null);
+  const [wiflixSources, setWiflixSources] = useState<{ url: string; label: string; category: string }[]>([]);
+  const [selectedWiflixSource, setSelectedWiflixSource] = useState<number>(0);
+  const [loadingWiflix, setLoadingWiflix] = useState(true);
+
+  // Extracted sources states (General HLS/File bucket)
+  const [nexusHlsSources, setNexusHlsSources] = useState<{ url: string; label: string }[]>([]);
+  const [nexusFileSources, setNexusFileSources] = useState<{ url: string; label: string }[]>([]);
+  const [selectedNexusHlsSource, setSelectedNexusHlsSource] = useState<number>(0);
+  const [selectedNexusFileSource, setSelectedNexusFileSource] = useState<number>(0);
+
+  // Viper source states
+  const [viperData, setViperData] = useState<ViperTvResponse | null>(null);
+  const [viperSources, setViperSources] = useState<{ url: string; label: string; quality: string; language: string }[]>([]);
+  const [selectedViperSource, setSelectedViperSource] = useState<number>(0);
+  const [loadingViper, setLoadingViper] = useState(true);
+
+  // Vox source states
+  const [voxData, setVoxData] = useState<VoxTvResponse | null>(null);
+  const [voxSources, setVoxSources] = useState<{ name: string; link: string }[]>([]);
+  const [selectedVoxSource, setSelectedVoxSource] = useState<number>(0);
+  const [loadingVox, setLoadingVox] = useState(true);
+
+  // PurStream (Bravo) HLS states
+  const [purstreamSources, setPurstreamSources] = useState<{ url: string; label: string }[]>([]);
+
+  // Rivestream VO/VOSTFR HLS states
+  const [rivestreamSources, setRivestreamSources] = useState<{ url: string; label: string; quality: number; service: string; category: string }[]>([]);
+  const [selectedRivestreamSource, setSelectedRivestreamSource] = useState<number>(0);
+  const [loadingRivestream, setLoadingRivestream] = useState(false);
+  const [rivestreamLoaded, setRivestreamLoaded] = useState(false);
+  const [rivestreamCaptions, setRivestreamCaptions] = useState<{ label: string; file: string }[]>([]);
+
+  // Ref to track the current source type to avoid issues with state updates
+  const currentSourceRef = useRef<PlayerSourceType | null>(null);
+
+  // Ref to track if we're loading Rivestream sources (to keep menu open)
+  const isLoadingRivestreamRef = useRef(false);
+
+  // Ref to keep the last valid hlsSrc during Rivestream loading
+  const lastValidHlsSrcRef = useRef<string>('');
+
+  // State for Embed player
+  const [embedUrl, setEmbedUrl] = useState<string | null>(null);
+  const [embedType, setEmbedType] = useState<string | null>(null);
+
+  const [showEmbedQuality, setShowEmbedQuality] = useState(false); // For the embed source menu
+
+  useEffect(() => {
+    if (!embedUrl) return;
+    const normalizedEmbedUrl = normalizeUqloadEmbedUrl(embedUrl);
+    if (normalizedEmbedUrl !== embedUrl) {
+      setEmbedUrl(normalizedEmbedUrl);
+    }
+  }, [embedUrl]);
+
+  // Add sibnet source for anime
+  const [sibnetUrl, setSibnetUrl] = useState<string | null>(null);
+
+  // Add videoSource state to track the selected mp4 URL
+  const [videoSource, setVideoSource] = useState<string | null>(null);
+
+  // État pour le menu des épisodes
+  const [showEpisodesMenu, setShowEpisodesMenu] = useState(false);
+  const [seasons, setSeasons] = useState<Season[]>([]);
+  const [episodes, setEpisodes] = useState<EpisodeInfo[]>([]);
+  const [currentEpisodeInfo, setCurrentEpisodeInfo] = useState<EpisodeInfo | null>(null);
+  const [selectedSeasonNumber, setSelectedSeasonNumber] = useState(seasonNumber);
+  const [showSeasonDropdown, setShowSeasonDropdown] = useState(false);
+
+  // Ref to prevent fetching episodes on initial mount (already fetched in initialFetch)
+  const isInitialEpisodeFetch = useRef(true);
+
+  // Ne pas afficher le bouton Sources en mode HLS
+  const [showSourceButton, setShowSourceButton] = useState(true);
+
+  const {
+    showPopupForPlayer,
+    handlePopupClose,
+    handlePopupAccept,
+    showAdFreePopup, // Added back
+    shouldLoadIframe, // Added back
+    adType // Added back
+  } = useAdFreePopup();
+  const [adPopupTriggered, setAdPopupTriggered] = useState(false);
+  const [adPopupBypass, setAdPopupBypass] = useState(false);
+  // Ajout de l'état pour savoir si l'utilisateur a cliqué sur la pub
+  const [hasClickedAd, setHasClickedAd] = useState(false);
+
+  // Movix Wrapped 2026 - Track TV viewing time
+  useWrappedTracker({
+    mode: 'viewing',
+    viewingData: id ? {
+      contentType: 'tv',
+      contentId: id,
+      seasonNumber: seasonNumber,
+      episodeNumber: episodeNumber,
+    } : undefined,
+    isActive: !isLoading && !!id,
+  });
+
+  // Function to update VIP retry message
+  const updateVipRetryMessage = (message: string) => {
+    if (isLoading) { // Only show retry messages during initial load
+      setVipRetryMessage(message);
+      setLoadingText(message);
+    }
+  };
+
+  // Function to handle navigation to the next episode
+  const handleNextEpisodeNav = (targetSeason: number, targetEpisode: number) => {
+    if (!id) return;
+    console.log(`[Debug] Navigating to next episode: S${targetSeason}E${targetEpisode}`);
+    // Replace navigate with full page reload
+    window.location.href = `/watch/tv/${encodeId(id)}/s/${targetSeason}/e/${targetEpisode}`;
+  };
+
+  // Helper function to extract sibnet ID from URL or other source
+  const extractSibnetIdFromUrl = (): string | null => {
+    // This is a placeholder - in a real app, you would implement the logic
+    // to extract the sibnet ID from URL parameters or some other source
+    return null;
+  };
+
+
+  // Function to fetch Rivestream VO/VOSTFR HLS sources for TV shows
+  const fetchRivestreamSources = useCallback(async () => {
+    // Vérifier si Rivestream est disponible (VIP check si activé)
+    if (!isRivestreamAvailable()) {
+      console.log('🚫 Rivestream sources are only available for VIP users');
+      setLoadingRivestream(false);
+      return;
+    }
+
+    if (!id || rivestreamLoaded) return;
+
+    console.log(`🎬 Starting Rivestream VO/VOSTFR HLS source fetch for TV show: ${id}, S${seasonNumber}E${episodeNumber}`);
+    isLoadingRivestreamRef.current = true; // Marquer le début du chargement
+    setLoadingRivestream(true);
+    setRivestreamLoaded(true);
+
+    const services = [
+      'flowcast',
+      'asiacloud',
+      'humpy',
+      'primevids',
+      'shadow',
+      'hindicast',
+      'animez',
+      'aqua',
+      'yggdrasil',
+      'putafilme',
+      'ophim'
+    ];
+
+    // Fonction pour traiter chaque service et retourner les sources et captions
+    const fetchService = async (service: string): Promise<{
+      sources: { url: string; label: string; quality: number; service: string; category: string }[];
+      captions: { label: string; file: string }[];
+    }> => {
+      try {
+        const secretKey = generateRivestreamSecretKey(id);
+        const url = buildProxyUrl(`https://rivestream.org/api/backendfetch?requestID=tvVideoProvider&id=${id}&season=${seasonNumber}&episode=${episodeNumber}&service=${service}&secretKey=${secretKey}&proxyMode=noProxy`);
+        console.log(`🔍 Fetching Rivestream TV service: ${service} with secretKey: ${secretKey}`);
+
+        const response = await axios.get<RivestreamResponse>(url, { timeout: 10000 });
+
+        if (response.data?.data?.sources && response.data.data.sources.length > 0) {
+          const sources = response.data.data.sources
+            .filter(s => s.url && (s.format === 'mp4' || s.format === 'hls'))
+            .map(source => {
+              // Remplacer le domaine si c'est un proxy Rivestream (détecté par le pattern proxy?url=)
+              let url = source.url;
+              if (url.includes('/proxy?url=')) {
+                try {
+                  const urlObj = new URL(url);
+                  urlObj.host = RIVESTREAM_PROXIES[0];
+                  url = urlObj.toString();
+                } catch (e) {
+                  url = url.replace(/^(https?:\/\/)[^\/]+/, `$1${RIVESTREAM_PROXIES[0]}`);
+                }
+              }
+
+              const mappedSource = {
+                url: url,
+                label: typeof source.quality === 'number' ? `${source.quality}p` : source.quality,
+                quality: typeof source.quality === 'number' ? source.quality : 720,
+                service: source.source,
+                category: service.toLowerCase()
+              };
+              return mappedSource;
+            });
+
+          // Collecter les captions si disponibles et les proxifier
+          const captions = response.data.data.captions?.map(caption => ({
+            label: caption.label,
+            file: buildProxyUrl(caption.file)
+          })) || [];
+
+          if (sources.length > 0) {
+            console.log(`✅ Found ${sources.length} sources from ${service}:`, sources);
+            if (captions.length > 0) {
+              console.log(`📝 Found ${captions.length} captions from ${service}:`, captions);
+            }
+            return { sources, captions };
+          }
+        }
+        return { sources: [], captions: [] };
+      } catch (error) {
+        console.error(`❌ Error fetching Rivestream TV service ${service}:`, error);
+        return { sources: [], captions: [] };
+      }
+    };
+
+    // Lancer toutes les requêtes en parallèle et collecter tous les résultats
+    try {
+      const allResults = await Promise.all(services.map(service => fetchService(service)));
+
+      // Fusionner toutes les sources
+      const collectedSources = allResults.flatMap(result => result.sources);
+
+      // Fusionner toutes les captions et dédupliquer
+      const allCaptions = allResults.flatMap(result => result.captions);
+
+      // Dédupliquer les captions par label
+      const uniqueCaptions = allCaptions.filter((caption, index, self) =>
+        index === self.findIndex(c => c.label === caption.label)
+      );
+
+      // Trier les captions : Français en premier, puis alphabétique
+      const sortedCaptions = uniqueCaptions.sort((a, b) => {
+        const aIsFrench = a.label.toLowerCase().includes('français') || a.label.toLowerCase().includes('french');
+        const bIsFrench = b.label.toLowerCase().includes('français') || b.label.toLowerCase().includes('french');
+
+        if (aIsFrench && !bIsFrench) return -1;
+        if (!aIsFrench && bIsFrench) return 1;
+        return a.label.localeCompare(b.label);
+      });
+
+      if (collectedSources.length === 0) {
+        console.log('⚠️ No Rivestream sources found for this TV episode');
+      } else {
+        const sortedSources = collectedSources.sort((a, b) => b.quality - a.quality);
+        setRivestreamSources(sortedSources);
+        console.log(`✅ Total Rivestream sources collected: ${sortedSources.length}`, sortedSources);
+      }
+
+      if (sortedCaptions.length > 0) {
+        setRivestreamCaptions(sortedCaptions);
+        console.log(`✅ Total Rivestream captions collected: ${sortedCaptions.length}`, sortedCaptions);
+      }
+    } finally {
+      setLoadingRivestream(false);
+      isLoadingRivestreamRef.current = false; // Marquer la fin du chargement
+    }
+  }, [id, seasonNumber, episodeNumber, rivestreamLoaded]);
+
+  // --- Fetch Seasons Data ---
+  const fetchSeasons = async () => {
+    try {
+      if (!id) return;
+
+      const seasonResponse = await axios.get(`https://api.themoviedb.org/3/tv/${id}/season/${seasonNumber}`, {
+        params: { api_key: TMDB_API_KEY, language: getTmdbLanguage() }
+      });
+
+      // Fetch all seasons for the show
+      const allSeasonsResponse = await axios.get(`https://api.themoviedb.org/3/tv/${id}`, {
+        params: { api_key: TMDB_API_KEY, language: getTmdbLanguage() }
+      });
+
+      if (allSeasonsResponse.data && allSeasonsResponse.data.seasons) {
+        setSeasons(allSeasonsResponse.data.seasons.filter((s: Season) => s.season_number > 0));
+      }
+
+      // Set episodes for the current season
+      if (seasonResponse.data && seasonResponse.data.episodes) {
+        setEpisodes(seasonResponse.data.episodes);
+      }
+    } catch (error) {
+      console.error('Error fetching seasons:', error);
+    }
+  };
+
+  // --- Fetch Next Episode Data ---
+  const fetchNextEpisodeData = useCallback(async () => {
+    if (!id || !seasonNumber || !episodeNumber) return;
+
+    setLoadingNextEpisode(true);
+
+    try {
+      // Check if there's a next episode in the current season
+      const nextEpisodeInCurrentSeason = await isNextEpisodeAvailable(id, seasonNumber, episodeNumber + 1);
+
+      if (nextEpisodeInCurrentSeason) {
+        setNextEpisodeData({
+          season_number: seasonNumber,
+          episode_number: episodeNumber + 1,
+          name: nextEpisodeInCurrentSeason.name,
+          overview: nextEpisodeInCurrentSeason.overview,
+          air_date: nextEpisodeInCurrentSeason.air_date,
+          vote_average: nextEpisodeInCurrentSeason.vote_average,
+          still_path: nextEpisodeInCurrentSeason.still_path,
+          show_id: parseInt(id),
+          show_name: showTitle
+        });
+      } else {
+        // Check if there's a next season
+        const nextSeason = await isNextSeasonAvailable(id, seasonNumber + 1);
+
+        if (nextSeason) {
+          // Check if the first episode of next season is available
+          const firstEpisodeOfNextSeason = await isNextEpisodeAvailable(id, seasonNumber + 1, 1);
+
+          if (firstEpisodeOfNextSeason) {
+            setNextEpisodeData({
+              season_number: seasonNumber + 1,
+              episode_number: 1,
+              name: firstEpisodeOfNextSeason.name,
+              overview: firstEpisodeOfNextSeason.overview,
+              air_date: firstEpisodeOfNextSeason.air_date,
+              vote_average: firstEpisodeOfNextSeason.vote_average,
+              still_path: firstEpisodeOfNextSeason.still_path,
+              show_id: parseInt(id),
+              show_name: showTitle
+            });
+          } else {
+            setNextEpisodeData(null);
+          }
+        } else {
+          setNextEpisodeData(null);
+        }
+      }
+    } catch (error) {
+      console.error('Error checking next episode:', error);
+      setNextEpisodeData(null);
+    } finally {
+      setLoadingNextEpisode(false);
+    }
+  }, [id, seasonNumber, episodeNumber, showTitle]);
+
+  // Helper function to check if next episode exists
+  const isNextEpisodeAvailable = async (showId: string, season: number, episode: number) => {
+    try {
+      const response = await axios.get(
+        `https://api.themoviedb.org/3/tv/${showId}/season/${season}/episode/${episode}`,
+        { params: { api_key: TMDB_API_KEY, language: getTmdbLanguage() } }
+      );
+
+      return response.data;
+    } catch (error) {
+      return null;
+    }
+  };
+
+  // Helper function to check if next season exists
+  const isNextSeasonAvailable = async (showId: string, season: number) => {
+    try {
+      const response = await axios.get(
+        `https://api.themoviedb.org/3/tv/${showId}/season/${season}`,
+        { params: { api_key: TMDB_API_KEY, language: getTmdbLanguage() } }
+      );
+
+      return response.data;
+    } catch (error) {
+      return null;
+    }
+  };
+
+  // Check loading states to finish overall loading
+  useEffect(() => {
+    if (!isLoading) return; // Don't run if already finished loading or errored
+
+    // Determine if all necessary sources have finished loading attempts
+    // Determine if all necessary sources have finished loading attempts
+    const areSourcesLoading = loadingDarkino || loadingCoflix || loadingOmega || loadingCustom || loadingSibnet || loadingFrembed || loadingFstream || loadingWiflix || loadingViper || loadingExtractions;
+
+    if (!areSourcesLoading) {
+      setVipRetryMessage(null); // Clear VIP message once attempts are done
+
+      // Bug fix: Ensure a valid source is selected after loading completes
+      // If current selected source isn't actually available, try to find a valid one
+      if (
+        (selectedSource === 'darkino' && (!darkinoSources || darkinoSources.length === 0)) ||
+        (selectedSource === 'mp4' && (!mp4Sources || mp4Sources.length === 0) && !sibnetUrl) ||
+        (selectedSource === 'm3u8' && !adFreeM3u8Url) ||
+        (!selectedSource)
+      ) {
+        console.log("[Debug] Source selection issue detected, attempting to find valid source");
+
+        // Try darkino first
+        if (darkinoSources && darkinoSources.length > 0) {
+          setSelectedSource('darkino');
+          setSelectedDarkinoSource(0);
+          // Clear any embed URLs to ensure HLS player is used
+          setEmbedUrl(null);
+          setEmbedType(null);
+          setOnlyVostfrAvailable(false);
+        }
+        // Then try mp4
+        else if (mp4Sources && mp4Sources.length > 0) {
+          setSelectedSource('mp4');
+          setSelectedMp4Source(0);
+          setVideoSource(mp4Sources[0].url);
+          // Clear any embed URLs to ensure HLS player is used
+          setEmbedUrl(null);
+          setEmbedType(null);
+        }
+        // Then try sibnet
+        else if (sibnetUrl) {
+          setSelectedSource('mp4');
+          setVideoSource(sibnetUrl);
+          // Clear any embed URLs to ensure HLS player is used
+          setEmbedUrl(null);
+          setEmbedType(null);
+        }
+        // Try custom sources
+        else if (customSources && customSources.length > 0) {
+          setSelectedSource('custom');
+          setEmbedUrl(customSources[0]);
+          setEmbedType('custom');
+        }
+        // Try Viper sources
+        else if (viperSources.length > 0) {
+          setSelectedSource('viper' as any);
+          setSelectedViperSource(0);
+          setEmbedUrl(viperSources[0].url);
+          setEmbedType('viper');
+        }
+        // Try frembed as a fallback
+        else if (frembedAvailable && id) {
+          setSelectedSource('frembed');
+          setEmbedUrl(`https://frembed.bond/api/serie.php?id=${id}&sa=${seasonNumber}&epi=${episodeNumber}`);
+          setEmbedType('frembed');
+        }
+        // Note: Ne pas sélectionner automatiquement vostfr - laisser l'utilisateur choisir
+        else {
+          console.log("[Debug] No sources available, waiting for user selection");
+        }
+      }
+      // Reset embed URL if HLS source is available to ensure HLS player is used
+      else if ((selectedSource === 'darkino' && darkinoSources.length > 0) ||
+        (selectedSource === 'mp4' && (mp4Sources.length > 0 || sibnetUrl)) ||
+        (selectedSource === 'm3u8' && adFreeM3u8Url)) {
+        setEmbedUrl(null);
+        setEmbedType(null);
+      }
+
+      setIsLoading(false); // Mark loading as complete
+    }
+  }, [loadingDarkino, loadingCoflix, loadingOmega, loadingCustom, loadingSibnet, loadingFrembed, loadingFstream, loadingWiflix, loadingExtractions, isLoading, selectedSource, darkinoSources, mp4Sources, sibnetUrl, adFreeM3u8Url, id, seasonNumber, episodeNumber, customSources, frembedAvailable]);
+
+  // Add effect to hide Sources button in HLS mode
+  useEffect(() => {
+    // Hide Sources button when playing HLS content (nexus_hls, nexus_file, darkino, mp4, m3u8, rivestream, rivestream_hls)
+    // Also hide during rivestream loading when selected
+    if ((selectedSource === 'nexus_hls' && nexusHlsSources.length > 0) ||
+      (selectedSource === 'nexus_file' && nexusFileSources.length > 0) ||
+      (selectedSource === 'darkino' && darkinoSources.length > 0) ||
+      (selectedSource === 'mp4' && (mp4Sources.length > 0 || sibnetUrl)) ||
+      (selectedSource === 'm3u8' && adFreeM3u8Url) ||
+      (selectedSource === 'bravo' && purstreamSources.length > 0) ||
+      (selectedSource === 'rivestream' && rivestreamSources.length > 0) ||
+      (selectedSource === 'rivestream_hls' && (rivestreamSources.length > 0 || loadingRivestream))) {
+      setShowSourceButton(false);
+    } else {
+      setShowSourceButton(true);
+    }
+  }, [selectedSource, nexusHlsSources, nexusFileSources, darkinoSources, mp4Sources, sibnetUrl, adFreeM3u8Url, rivestreamSources, loadingRivestream]);
+
+  // Effect to fetch episodes when the selected season changes in the menu
+  useEffect(() => {
+    const fetchEpisodesForSelectedSeason = async () => {
+      if (!id || !selectedSeasonNumber) return; // Need show ID and a selected season
+
+      console.log(`[WatchTv] Fetching episodes for selected season: ${selectedSeasonNumber}`);
+      // Consider adding an setIsLoadingEpisodes state here
+      try {
+        const response = await axios.get(`https://api.themoviedb.org/3/tv/${id}/season/${selectedSeasonNumber}`, {
+          params: { api_key: TMDB_API_KEY, language: getTmdbLanguage() }
+        });
+        if (response.data && response.data.episodes) {
+          setEpisodes(response.data.episodes); // Update the episodes list
+        } else {
+          console.warn(`No episodes found for season ${selectedSeasonNumber}`);
+          setEpisodes([]); // Clear if no episodes found
+        }
+      } catch (error) {
+        console.error(`Error fetching episodes for season ${selectedSeasonNumber}:`, error);
+        setEpisodes([]); // Clear on error
+      } finally {
+        // Consider setting setIsLoadingEpisodes(false) here
+      }
+    };
+
+    // Check the ref to prevent running on the initial render
+    if (isInitialEpisodeFetch.current) {
+      isInitialEpisodeFetch.current = false; // Set ref to false after initial render
+    } else {
+      // Fetch episodes only when selectedSeasonNumber changes *after* the initial render
+      fetchEpisodesForSelectedSeason();
+    }
+  }, [selectedSeasonNumber, id]); // Re-run whenever selectedSeasonNumber or the show id changes
+
+  // --- Fetch video sources for the specific episode ---
+  const fetchVideoSources = useCallback(async () => {
+    if (!id || !seasonNumber || !episodeNumber) {
+      return;
+    }
+
+    setLoadingText(t('watch.loadingTmdb'));
+    // Reset individual loading states
+    setLoadingDarkino(true);
+    setLoadingCoflix(true);
+    setLoadingOmega(true);
+    setLoadingCustom(true);
+    setLoadingSibnet(false);
+    setLoadingFstream(true);
+    setLoadingWiflix(true);
+    setLoadingViper(true);
+    setLoadingVox(true);
+    setLoadingExtractions(true);
+    setDarkinoAvailable(false);
+    setMp4Sources([]);
+    setCustomSources([]);
+    setCoflixData(null);
+    setOmegaData(null);
+    setFstreamData(null);
+    setFstreamSources([]);
+    setWiflixData(null);
+    setWiflixSources([]);
+    setViperData(null);
+    setViperSources([]);
+    setVoxData(null);
+    setVoxSources([]);
+
+    let showDetails: TVShow | null = null;
+    let currentEpisodeDetails: EpisodeDetails | null = null;
+    let currentReleaseYear: number | null = null;
+
+    try {
+      // Get TV Show and Episode details from TMDB
+      const [tmdbShowResponse, tmdbEpisodeResponse] = await Promise.allSettled([
+        axios.get(`https://api.themoviedb.org/3/tv/${id}`, { params: { api_key: TMDB_API_KEY, language: getTmdbLanguage() } }),
+        axios.get(`https://api.themoviedb.org/3/tv/${id}/season/${seasonNumber}/episode/${episodeNumber}`, { params: { api_key: TMDB_API_KEY, language: getTmdbLanguage() } }),
+      ]);
+
+      if (tmdbShowResponse.status === 'fulfilled') {
+        showDetails = tmdbShowResponse.value.data;
+        setShowTitle(showDetails?.name ?? t('watch.unknownSeries'));
+        setBackdropPath(showDetails?.backdrop_path ?? null);
+        setShowPosterPath(showDetails?.poster_path ?? null); // Store poster
+        currentReleaseYear = showDetails?.first_air_date ? new Date(showDetails.first_air_date).getFullYear() : null;
+        setReleaseYear(currentReleaseYear);
+      } else {
+        console.error("Failed to fetch TMDB show details:", tmdbShowResponse.reason);
+        // Continue despite errors - don't throw an exception that would stop other sources
+        // Set defaults when TMDB fails
+        setShowTitle(t('watch.unknownSeries'));
+        setBackdropPath(null);
+        setShowPosterPath(null);
+      }
+
+      // Age restriction check
+      const profileAge = currentProfile?.ageRestriction ?? 0;
+      if (profileAge > 0 && tmdbShowResponse.status === 'fulfilled') {
+        try {
+          const certResponse = await axios.get(`https://api.themoviedb.org/3/tv/${id}/content_ratings`, {
+            params: { api_key: TMDB_API_KEY },
+          });
+          const ratings = certResponse.data.results;
+          let cert = '';
+          const fr = ratings.find((r: any) => r.iso_3166_1 === 'FR');
+          if (fr?.rating) cert = fr.rating;
+          if (!cert) {
+            const us = ratings.find((r: any) => r.iso_3166_1 === 'US');
+            if (us?.rating) cert = us.rating;
+          }
+          if (cert && !isContentAllowed(cert, profileAge)) {
+            setContentCert(cert);
+            setIsBlocked(true);
+            setIsLoading(false);
+            return;
+          }
+        } catch (e) {
+          console.log('Could not fetch certifications for age check');
+        }
+      }
+
+      if (tmdbEpisodeResponse.status === 'fulfilled') {
+        currentEpisodeDetails = tmdbEpisodeResponse.value.data;
+        setEpisodeTitle(currentEpisodeDetails?.name ?? t('watch.episodeN', { n: episodeNumber }));
+        setEpisodeStillPath(currentEpisodeDetails?.still_path ?? null);
+      } else {
+        console.error("Failed to fetch TMDB episode details:", tmdbEpisodeResponse.reason);
+        setEpisodeTitle(t('watch.episodeN', { n: episodeNumber }));
+        setEpisodeStillPath(null);
+      }
+
+      // Resume playback functionality removed
+
+      // Get seasons and episodes for navigation
+      if (showDetails) {
+        await fetchSeasons();
+      }
+
+      // ========== EXÉCUTION PARALLÈLE DE TOUTES LES REQUÊTES API ==========
+      // On n'exécute que si on a les infos de base sur la série
+      if (currentReleaseYear && showDetails) {
+        // ========== INITIATE ALL ASYNCHRONOUS SOURCE CHECKS (NON-BLOCKING) ==========
+        const darkinoPromise = checkDarkinoAvailability(
+          showDetails.name,
+          currentReleaseYear,
+          seasonNumber,
+          episodeNumber,
+          id,
+          updateVipRetryMessage
+        ).catch(error => {
+          console.error('Error checking Darkino availability:', error);
+          return { available: false, sources: [] as any[], darkinoId: null };
+        });
+
+        const customLinksPromise = (async () => {
+          try {
+            return await checkCustomTVLink(id, seasonNumber, episodeNumber);
+          } catch (error) {
+            console.error('Error checking custom TV links:', error);
+            return { isAvailable: false, customLinks: [] as string[], mp4Links: [] as { url: string; label?: string; language?: string; isVip?: boolean }[] };
+          } finally {
+            setLoadingCustom(false);
+          }
+        })();
+
+        const frembedAvailabilityPromise = (async () => {
+          try {
+            return await checkFrembedAvailability(id, seasonNumber, episodeNumber);
+          } catch (error) {
+            console.error('Error checking Frembed availability:', error);
+            return false;
+          } finally {
+            setLoadingFrembed(false);
+          }
+        })();
+
+        const coflixPromise = (async () => {
+          try {
+            const coflixResponse = await axios.get(`${MAIN_API}/api/tmdb/tv/${id}`, {
+              params: { season: seasonNumber, episode: episodeNumber }
+            });
+            return coflixResponse.data;
+          } catch (error) {
+            console.error('Error fetching Coflix TV sources:', error);
+            return null;
+          } finally {
+            setLoadingCoflix(false);
+          }
+        })();
+
+        const omegaPromise = (async () => {
+          let omegaDataResult = null;
+          try {
+            // Get IMDB ID for the show
+            const imdbResponse = await axios.get(`https://api.themoviedb.org/3/tv/${id}/external_ids`, {
+              params: { api_key: TMDB_API_KEY },
+            });
+
+            if (imdbResponse.data && imdbResponse.data.imdb_id) {
+              const imdbId = imdbResponse.data.imdb_id;
+              // Appel sans params inutiles
+              const omegaResponse = await axios.get(`${MAIN_API}/api/imdb/tv/${imdbId}`);
+              omegaDataResult = omegaResponse.data;
+            }
+          } catch (error) {
+            console.error('Error fetching Omega TV sources:', error);
+            omegaDataResult = null;
+          } finally {
+            setLoadingOmega(false);
+          }
+          return omegaDataResult;
+        })();
+
+        // ========== CHECK PURSTREAM (BRAVO) SOURCE ==========
+        const purstreamPromise = (async () => {
+          try {
+            const purstreamResponse = await axios.get(`${MAIN_API}/api/purstream/tv/${id}/stream`, {
+              params: { season: seasonNumber, episode: episodeNumber },
+              headers: { ...getVipHeaders() }
+            });
+            return purstreamResponse.data;
+          } catch (error) {
+            console.error('Error fetching PurStream TV sources:', error);
+            return null;
+          }
+        })();
+
+        // ========== CHECK FSTREAM SOURCE ==========
+        const fstreamPromise = (async () => {
+          try {
+            // Envoyer la clé VIP via header pour vérification côté serveur
+            const fstreamResponse = await axios.get(`${MAIN_API}/api/fstream/tv/${id}/season/${seasonNumber}`, {
+              headers: { ...getVipHeaders() }
+            });
+            return fstreamResponse.data;
+          } catch (error) {
+            console.error('Error fetching FStream TV sources:', error);
+            return null;
+          } finally {
+            setLoadingFstream(false);
+          }
+        })();
+
+        // ========== CHECK WIFLIX (LYNX) SOURCE ==========
+        const wiflixPromise = (async () => {
+          try {
+            const wiflixResponse = await axios.get(`${MAIN_API}/api/wiflix/tv/${id}/${seasonNumber}`);
+            return wiflixResponse.data;
+          } catch (error) {
+            console.error('Error fetching Wiflix/Lynx TV source:', error);
+            return null;
+          } finally {
+            setLoadingWiflix(false);
+          }
+        })();
+
+        // ========== CHECK VIPER SOURCE ==========
+        const viperPromise = (async () => {
+          try {
+            const viperResponse = await axios.get(`${MAIN_API}/api/cpasmal/tv/${id}/${seasonNumber}/${episodeNumber}`);
+            return viperResponse.data;
+          } catch (error) {
+            console.error('Error fetching Viper TV source:', error);
+            return null;
+          } finally {
+            setLoadingViper(false);
+          }
+        })();
+
+        // ========== CHECK VOX SOURCE ==========
+        const voxPromise = (async () => {
+          try {
+            return await checkVoxAvailability(id!, seasonNumber, episodeNumber);
+          } catch (error) {
+            console.error('Error fetching Vox TV source:', error);
+            return null;
+          } finally {
+            setLoadingVox(false);
+          }
+        })();
+
+        // ========== AWAIT ALL SOURCE CHECKS TO COMPLETE ==========
+        const [
+          darkinoResult,
+          customLinksResult,
+          frembedAvailability,
+          coflixResult,
+          rawOmegaData,
+          purstreamResult,
+          fstreamResult,
+          wiflixResult,
+          viperResult,
+          voxResult
+        ] = await Promise.all([
+          darkinoPromise,
+          customLinksPromise,
+          frembedAvailabilityPromise,
+          coflixPromise,
+          omegaPromise,
+          purstreamPromise,
+          fstreamPromise,
+          wiflixPromise,
+          viperPromise,
+          voxPromise
+        ]);
+
+        // =========== DÉBUT DES EXTRACTIONS (APRÈS LES REQUÊTES PRINCIPALES) ===========
+        console.log('🔄 Début des extractions M3U8...');
+
+        // ========== PROCESS OMEGA RESULTS ==========
+        let processedOmegaDataForState = null;
+        let isOmegaAvailable = false;
+        let supervideoM3u8: string | null = null;
+        let droploadM3u8: string | null = null;
+        if (rawOmegaData) {
+          isOmegaAvailable = checkOmegaAvailability(rawOmegaData, seasonNumber, episodeNumber);
+          if (isOmegaAvailable) {
+            processedOmegaDataForState = rawOmegaData;
+            // Ajout: si supervideo ou dropload, tenter d'extraire le m3u8
+            const omegaPlayers = extractOmegaPlayers(rawOmegaData, seasonNumber, episodeNumber);
+            const supervideo = omegaPlayers.find((p: any) => p.player && p.player.toLowerCase().includes('supervideo'));
+            if (supervideo) {
+              const supervideoResult = await extractM3u8FromEmbed(supervideo, MAIN_API);
+              if (supervideoResult?.success && supervideoResult.hlsUrl) {
+                supervideoM3u8 = supervideoResult.hlsUrl;
+              }
+            }
+            const dropload = omegaPlayers.find((p: any) => p.player && p.player.toLowerCase().includes('dropload'));
+            if (dropload) {
+              const droploadResult = await extractM3u8FromEmbed(dropload, MAIN_API);
+              if (droploadResult?.success && droploadResult.m3u8Url) {
+                droploadM3u8 = droploadResult.m3u8Url;
+              }
+            }
+          } else {
+            console.log(`Omega source not available for S${seasonNumber}E${episodeNumber}`);
+          }
+        }
+        setOmegaData(processedOmegaDataForState);
+
+        // ========== TRAITEMENT DES RÉSULTATS DE DARKINO ==========
+        if (darkinoResult && darkinoResult.available && darkinoResult.sources.length > 0) {
+          setDarkinoAvailable(true);
+          setDarkinoSources(darkinoResult.sources);
+          setDarkinoShowId(darkinoResult.darkinoId || null);
+          // Don't set selectedSource here - let the priority logic decide
+        } else {
+          setDarkinoAvailable(false);
+          setDarkinoSources([]);
+          setDarkinoShowId(null);
+        }
+        setLoadingDarkino(false);
+
+        // ========== TRAITEMENT DES RÉSULTATS DES LIENS CUSTOMS ==========
+        // customLinksResult now holds { isAvailable, customLinks, mp4Links }
+        setCustomSources(customLinksResult.customLinks || []);
+
+        let fetchedMp4Sources: { url: string; label?: string; language?: string; isVip?: boolean }[] = customLinksResult.mp4Links || [];
+        setMp4Sources(fetchedMp4Sources);
+
+        // ========== TRAITEMENT DES RÉSULTATS DE FREMBED ==========
+        setFrembedAvailable(frembedAvailability);
+
+        // ========== TRAITEMENT DES RÉSULTATS COFLIX ==========
+        if (coflixResult) {
+          console.log('Coflix data received:', coflixResult);
+          //setCoflixData(coflixResult); // This was the old direct assignment
+          // Extraire les données spécifiques pour les séries
+          // Pour Coflix, current_episode contient les informations nécessaires
+          if (coflixResult?.current_episode &&
+            (coflixResult?.current_episode?.iframe_src ||
+              (coflixResult?.current_episode?.player_links && coflixResult?.current_episode?.player_links.length > 0))) {
+            setCoflixData(coflixResult.current_episode);
+          } else if (coflixResult?.iframe_src || (coflixResult?.player_links && coflixResult?.player_links.length > 0)) {
+            // Fallback for cases where coflixResult itself is the episode data
+            setCoflixData(coflixResult);
+          }
+        }
+
+        // ========== TRAITEMENT DES RÉSULTATS OMEGA (State already set via setOmegaData) ==========
+        // omegaData state is now set. The original logic for extracting players (if (omegaData && omegaData.type === 'tv')...)
+        // will use the state. `isOmegaAvailable` is also correctly set.
+        if (processedOmegaDataForState) { // Check the data we attempted to set to state
+          console.log('Omega data received (for processing):', processedOmegaDataForState);
+          // The logic to extract players if needed for default source selection will use the `omegaData` state
+          // which was set by `setOmegaData(processedOmegaDataForState)`
+          // Example:
+          // if (omegaData.type === 'tv' && omegaData.series && omegaData.series.length > 0) { ... }
+          // This part is handled later in "DETERMINE DEFAULT SELECTED SOURCE" or by extractOmegaPlayers using the state
+        }
+
+        // ========== TRAITEMENT DES RÉSULTATS NEXUS (REMOVED) ==========
+        let finalHlsSources: { url: string; label: string }[] = [];
+        let finalFileSources: { url: string; label: string }[] = [];
+
+        // ========== PURSTREAM (BRAVO) SOURCES ==========
+        if (purstreamResult && purstreamResult.sources && purstreamResult.sources.length > 0) {
+          console.log('🎬 Processing PurStream (Bravo) result:', purstreamResult.sources.length, 'sources');
+          const bravoSources = purstreamResult.sources
+            .filter((s: { url: string; name: string; format: string }) => s.url)
+            .map((s: { url: string; name: string; format: string }) => ({
+              url: s.url,
+              label: (s.name || 'HLS').replace(/^pur\s*\|\s*/i, '').replace(/\s*\|\s*/g, ' - '),
+            }));
+          setPurstreamSources(bravoSources);
+          console.log(`✅ PurStream (Bravo) sources set: ${bravoSources.length}`);
+        }
+
+        if (customLinksResult.customLinks && customLinksResult.customLinks.length > 0) {
+          console.log('🔍 Processing Firebase custom links for darkibox extraction...');
+          const darkiboxLinks = customLinksResult.customLinks.filter(url => url.toLowerCase().includes('darkibox'));
+
+          // Paralléliser les extractions darkibox
+          if (darkiboxLinks.length > 0) {
+            const darkiboxPromises = darkiboxLinks.map(async (darkiboxUrl) => {
+              console.log('🎬 Processing Firebase darkibox link:', darkiboxUrl);
+              try {
+                const darkiboxResult = await extractDarkiboxSources(darkiboxUrl, MAIN_API);
+                if (darkiboxResult?.success && darkiboxResult.hlsUrl) {
+                  return { url: darkiboxResult.hlsUrl, label: 'Darkibox' };
+                }
+              } catch (error) {
+                console.error('❌ Error extracting m3u8 from Firebase darkibox link:', error);
+              }
+              return null;
+            });
+
+            const darkiboxResults = await Promise.all(darkiboxPromises);
+            const validDarkiboxResults = darkiboxResults.filter(result => result !== null);
+            finalHlsSources = [...finalHlsSources, ...validDarkiboxResults];
+            console.log(`✅ Added ${validDarkiboxResults.length} Firebase Darkibox HLS sources`);
+          }
+        }
+
+        // Add supervideo and dropload HLS sources if available (LOWER PRIORITY)
+        if (rawOmegaData) {
+          console.log('🔍 Processing Omega result for supervideo/dropload extraction...');
+          const omegaPlayers = extractOmegaPlayers(rawOmegaData, seasonNumber, episodeNumber);
+
+          // Paralléliser les extractions Omega
+          const omegaExtractionPromises = [];
+
+          const supervideo = omegaPlayers.find((p: any) => p.player && p.player.toLowerCase().includes('supervideo'));
+          if (supervideo) {
+            console.log('🎬 Found supervideo player:', supervideo);
+            omegaExtractionPromises.push(
+              extractM3u8FromEmbed(supervideo, MAIN_API).then(result => ({
+                type: 'supervideo',
+                result,
+                label: 'Supervideo HLS 720p'
+              }))
+            );
+          }
+
+          const dropload = omegaPlayers.find((p: any) => p.player && p.player.toLowerCase().includes('dropload'));
+          if (dropload) {
+            console.log('🎬 Found dropload player:', dropload);
+            omegaExtractionPromises.push(
+              extractM3u8FromEmbed(dropload, MAIN_API).then(result => ({
+                type: 'dropload',
+                result,
+                label: 'Dropload HLS 720p'
+              }))
+            );
+          }
+
+          if (omegaExtractionPromises.length > 0) {
+            const omegaResults = await Promise.all(omegaExtractionPromises);
+            omegaResults.forEach(({ type, result, label }) => {
+              if (type === 'supervideo' && result?.success && result.hlsUrl) {
+                finalHlsSources = [...finalHlsSources, { url: result.hlsUrl, label }];
+                console.log(`✅ Added ${label} source:`, result.hlsUrl);
+              } else if (type === 'dropload' && result?.success && result.m3u8Url) {
+                finalHlsSources = [...finalHlsSources, { url: result.m3u8Url, label }];
+                console.log(`✅ Added ${label} source:`, result.m3u8Url);
+              }
+            });
+          }
+        }
+
+        // Process Firebase dropload links for m3u8 extraction
+        if (customLinksResult.customLinks && customLinksResult.customLinks.length > 0) {
+          console.log('🔍 Processing Firebase custom links for dropload extraction...');
+          const droploadLinks = customLinksResult.customLinks.filter(url => url.toLowerCase().includes('dropload'));
+
+          // Paralléliser les extractions dropload Firebase
+          if (droploadLinks.length > 0) {
+            const droploadPromises = droploadLinks.map(async (droploadUrl) => {
+              console.log('🎬 Processing Firebase dropload link:', droploadUrl);
+              try {
+                const droploadResult = await extractM3u8FromEmbed({
+                  player: 'dropload',
+                  link: droploadUrl
+                }, MAIN_API);
+                console.log('📡 Firebase Dropload extraction result:', droploadResult);
+                if (droploadResult?.success && droploadResult.m3u8Url) {
+                  return { url: droploadResult.m3u8Url, label: 'Dropload HLS 720p' };
+                }
+              } catch (error) {
+                console.error('❌ Error extracting m3u8 from Firebase dropload link:', error);
+              }
+              return null;
+            });
+
+            const droploadResults = await Promise.all(droploadPromises);
+            const validDroploadResults = droploadResults.filter(result => result !== null);
+            finalHlsSources = [...finalHlsSources, ...validDroploadResults];
+            console.log(`✅ Added ${validDroploadResults.length} Firebase Dropload HLS sources`);
+          }
+        }
+
+        // Process Firebase custom links for VOE.SX and UQLOAD extraction
+        if (customLinksResult.customLinks && customLinksResult.customLinks.length > 0) {
+          // VOE.SX (HLS)
+          try {
+            const voeLinks = customLinksResult.customLinks.filter((url: string) => typeof url === 'string' && (url.toLowerCase().includes('voe.') || url.toLowerCase().includes('jilliandescribecompany')));
+
+            // Paralléliser les extractions VOE
+            if (voeLinks.length > 0) {
+              const voePromises = voeLinks.map(async (voeUrl) => {
+                try {
+                  const voeResult = await extractVoeM3u8(voeUrl);
+                  if (voeResult?.success && voeResult.hlsUrl) {
+                    return { url: voeResult.hlsUrl, label: 'Voe HLS 720p' };
+                  }
+                } catch (e) {
+                  console.error('❌ Error extracting VOE m3u8 from Firebase link (TV):', e);
+                }
+                return null;
+              });
+
+              const voeResults = await Promise.all(voePromises);
+              const validVoeResults = voeResults.filter(result => result !== null);
+              finalHlsSources = [...finalHlsSources, ...validVoeResults];
+              console.log(`✅ Added ${validVoeResults.length} VOE HLS sources from Firebase`);
+            }
+          } catch { }
+
+          // UQLOAD (File MP4)
+          try {
+            const uqLinks = customLinksResult.customLinks.filter((url: string) => typeof url === 'string' && url.toLowerCase().includes('uqload'));
+
+            // Paralléliser les extractions UQLOAD
+            if (uqLinks.length > 0) {
+              const uqPromises = uqLinks.map(async (uqUrl) => {
+                try {
+                  const uqResult = await extractUqloadFile(normalizeUqloadEmbedUrl(uqUrl), MAIN_API);
+                  if (uqResult?.success && uqResult.m3u8Url) {
+                    return { url: uqResult.m3u8Url, label: 'Uqload 360p' };
+                  }
+                } catch (e) {
+                  console.error('❌ Error extracting UQLOAD from Firebase link (TV):', e);
+                }
+                return null;
+              });
+
+              const uqResults = await Promise.all(uqPromises);
+              const validUqResults = uqResults.filter(result => result !== null);
+              finalFileSources = [...finalFileSources, ...validUqResults];
+              console.log(`✅ Added ${validUqResults.length} UQLOAD file sources from Firebase`);
+            }
+          } catch { }
+
+          // DOODSTREAM from Firebase custom links
+          try {
+            const doodLinks = customLinksResult.customLinks.filter((url: string) => typeof url === 'string' && isDoodStreamEmbed(url));
+            if (doodLinks.length > 0) {
+              console.log(`[DOODSTREAM/FIREBASE][TV] Found ${doodLinks.length} DoodStream links from Firebase`);
+              const doodPromises = doodLinks.map(async (doodUrl: string) => {
+                try {
+                  const doodResult = await extractDoodStreamFile(doodUrl);
+                  if (doodResult?.success && doodResult.m3u8Url) {
+                    return { url: doodResult.m3u8Url, label: 'DoodStream' };
+                  }
+                } catch (e) {
+                  console.error(' Error extracting DoodStream from Firebase link (TV):', e);
+                }
+                return null;
+              });
+              const doodResults = await Promise.all(doodPromises);
+              const validDoodResults = doodResults.filter(result => result !== null);
+              finalFileSources = [...finalFileSources, ...validDoodResults];
+              console.log(` Added ${validDoodResults.length} DoodStream sources from Firebase`);
+            }
+          } catch { }
+
+          // SEEKSTREAMING from Firebase custom links
+          try {
+            const seekLinks = customLinksResult.customLinks.filter((url: string) => typeof url === 'string' && isSeekStreamingEmbed(url));
+            if (seekLinks.length > 0) {
+              console.log(`[SEEKSTREAMING/FIREBASE][TV] Found ${seekLinks.length} SeekStreaming links from Firebase`);
+              const seekPromises = seekLinks.map(async (seekUrl: string) => {
+                try {
+                  const seekResult = await extractSeekStreamingM3u8(seekUrl);
+                  if (seekResult?.success && seekResult.hlsUrl) {
+                    return { url: seekResult.hlsUrl, label: 'SeekStreaming HLS' };
+                  }
+                } catch (e) {
+                  console.error(' Error extracting SeekStreaming from Firebase link (TV):', e);
+                }
+                return null;
+              });
+              const seekResults = await Promise.all(seekPromises);
+              const validSeekResults = seekResults.filter(result => result !== null);
+              finalHlsSources = [...finalHlsSources, ...validSeekResults];
+              console.log(` Added ${validSeekResults.length} SeekStreaming HLS sources from Firebase`);
+            }
+          } catch { }
+        }
+
+        // Process Coflix MULTI links for VOE.SX and UQLOAD extraction (ignore Omega)
+        if (coflixResult) {
+          const multiLinks = (coflixResult.current_episode && coflixResult.current_episode.player_links)
+            ? coflixResult.current_episode.player_links
+            : (coflixResult.player_links || []);
+
+          const decodedLinks = multiLinks
+            .map((p: any) => getCoflixPreferredUrl(p))
+            .filter((u: string) => !!u);
+
+          console.log('[VOE/UQLOAD][TV] Multi decoded links:', decodedLinks);
+
+          // VOE.SX from MULTI (HLS) - Paralléliser
+          const voeMulti = decodedLinks.filter((u: string) => u.toLowerCase().includes('voe.'));
+          console.log(`[VOE/UQLOAD][TV] Found ${voeMulti.length} VOE links from MULTI`, voeMulti);
+
+          if (voeMulti.length > 0) {
+            const voeMultiPromises = voeMulti.map(async (vUrl: string) => {
+              try {
+                console.log('[VOE/UQLOAD][TV] Extracting VOE m3u8 from MULTI link:', vUrl);
+                const voeResult = await extractVoeM3u8(vUrl);
+                if (voeResult?.success && voeResult.hlsUrl) {
+                  return { url: voeResult.hlsUrl, label: 'Voe HLS 720p' };
+                }
+              } catch (e) {
+                console.error('❌ Error extracting VOE m3u8 from MULTI link (TV):', e);
+              }
+              return null;
+            });
+
+            const voeMultiResults = await Promise.all(voeMultiPromises);
+            const validVoeMultiResults = voeMultiResults.filter(result => result !== null);
+            finalHlsSources = [...finalHlsSources, ...validVoeMultiResults];
+            console.log(`[VOE/UQLOAD][TV] Added ${validVoeMultiResults.length} VOE HLS sources from MULTI`);
+          }
+
+          // UQLOAD from MULTI (File) - Paralléliser
+          const uqMulti = decodedLinks.filter((u: string) => u.toLowerCase().includes('uqload'));
+          console.log(`[VOE/UQLOAD][TV] Found ${uqMulti.length} UQLOAD links from MULTI`, uqMulti);
+
+          if (uqMulti.length > 0) {
+            const uqMultiPromises = uqMulti.map(async (uUrl: string) => {
+              try {
+                console.log('[VOE/UQLOAD][TV] Extracting UQLOAD file from MULTI link:', uUrl);
+                const uqResult = await extractUqloadFile(normalizeUqloadEmbedUrl(uUrl), MAIN_API);
+                if (uqResult?.success && uqResult.m3u8Url) {
+                  return { url: uqResult.m3u8Url, label: 'Uqload 360p' };
+                }
+              } catch (e) {
+                console.error('❌ Error extracting UQLOAD from MULTI link (TV):', e);
+              }
+              return null;
+            });
+
+            const uqMultiResults = await Promise.all(uqMultiPromises);
+            const validUqMultiResults = uqMultiResults.filter(result => result !== null);
+            finalFileSources = [...finalFileSources, ...validUqMultiResults];
+            console.log(`[VOE/UQLOAD][TV] Added ${validUqMultiResults.length} UQLOAD file sources from MULTI`);
+          }
+
+          // DOODSTREAM from Coflix MULTI
+          const doodMulti = decodedLinks.filter((u: string) => isDoodStreamEmbed(u));
+          if (doodMulti.length > 0) {
+            console.log(`[DOODSTREAM/COFLIX][TV] Found ${doodMulti.length} DoodStream links from MULTI`);
+            const doodMultiPromises = doodMulti.map(async (dUrl: string) => {
+              try {
+                const doodResult = await extractDoodStreamFile(dUrl);
+                if (doodResult?.success && doodResult.m3u8Url) {
+                  return { url: doodResult.m3u8Url, label: 'DoodStream' };
+                }
+              } catch (e) {
+                console.error('❌ Error extracting DoodStream from MULTI link (TV):', e);
+              }
+              return null;
+            });
+            const doodMultiResults = await Promise.all(doodMultiPromises);
+            const validDoodMultiResults = doodMultiResults.filter(result => result !== null);
+            finalFileSources = [...finalFileSources, ...validDoodMultiResults];
+            console.log(`✅ Added ${validDoodMultiResults.length} DoodStream sources from MULTI`);
+          }
+
+          // SEEKSTREAMING from Coflix MULTI
+          const seekMulti = decodedLinks.filter((u: string) => isSeekStreamingEmbed(u));
+          if (seekMulti.length > 0) {
+            console.log(`[SEEKSTREAMING/COFLIX][TV] Found ${seekMulti.length} SeekStreaming links from MULTI`);
+            const seekMultiPromises = seekMulti.map(async (sUrl: string) => {
+              try {
+                const seekResult = await extractSeekStreamingM3u8(sUrl);
+                if (seekResult?.success && seekResult.hlsUrl) {
+                  return { url: seekResult.hlsUrl, label: 'SeekStreaming HLS' };
+                }
+              } catch (e) {
+                console.error('❌ Error extracting SeekStreaming from MULTI link (TV):', e);
+              }
+              return null;
+            });
+            const seekMultiResults = await Promise.all(seekMultiPromises);
+            const validSeekMultiResults = seekMultiResults.filter(result => result !== null);
+            finalHlsSources = [...finalHlsSources, ...validSeekMultiResults];
+            console.log(`✅ Added ${validSeekMultiResults.length} SeekStreaming HLS sources from MULTI`);
+          }
+        }
+
+
+        console.log('🎯 Final HLS sources after supervideo/dropload processing:', finalHlsSources);
+
+        // =========== TRAITEMENT DES RÉSULTATS FSTREAM ===========
+        let fstreamProcessedSources: { url: string; label: string; category: string }[] = [];
+        const fstreamHlsSources: { url: string; label: string; category: string }[] = [];
+        const fsvidSources: { url: string; label: string; category: string }[] = [];
+
+        if (fstreamResult && fstreamResult.success && fstreamResult.episodes) {
+          console.log('🎬 Processing FStream result for TV:', fstreamResult);
+          setFstreamData(fstreamResult);
+
+          // Check if user is VIP
+          const isVip = localStorage.getItem('is_vip') === 'true';
+
+          // Get the specific episode data
+          const episodeData = fstreamResult.episodes[episodeNumber.toString()];
+          if (episodeData && episodeData.languages) {
+            // Process all FStream language categories
+            const categories = ['VF', 'VOSTFR', 'VOENG', 'Default'];
+            const otherSources: { url: string; label: string; category: string }[] = [];
+
+            categories.forEach(category => {
+              const categoryPlayers = episodeData.languages[category] || [];
+
+              // Séparer les sources fsvid et premium des autres sources
+              categoryPlayers.forEach((player: any) => {
+                const source = {
+                  url: player.url,
+                  label: `${category} - ${player.player} ${player.quality}`,
+                  category: category
+                };
+
+                const urlLower = player.url ? player.url.toLowerCase() : '';
+                const playerLower = player.player ? player.player.toLowerCase() : '';
+
+                // Ajouter fsvid si c'est détecté comme player FSvid, premium, ou si l'url contient fsvid
+                if (urlLower.includes('fsvid') || playerLower === 'premium' || playerLower === 'fsvid') {
+                  fsvidSources.push(source); // Toujours garder pour l'extraction M3U8
+                } else {
+                  otherSources.push(source); // Sources régulières pour l'affichage
+                }
+              });
+            });
+
+            // Utiliser seulement les sources non-fsvid/non-premium pour l'affichage
+            fstreamProcessedSources = [...otherSources];
+          }
+
+          console.log('✅ FStream TV sources processed:', fstreamProcessedSources.length);
+          console.log('🎯 FStream fsvid sources found:', fsvidSources.length);
+
+          // =========== EXTRACTION M3U8 DES SOURCES FSTREAM ===========
+          console.log('🔍 Extracting M3U8 from FStream TV sources...');
+
+          // Paralléliser les extractions M3U8 pour vidzy et fsvid
+          const fstreamExtractionPromises: Promise<{ type: string; result: M3u8Result | null; originalSource: { url: string; label: string; category: string } }>[] = [];
+
+          // Extraire M3U8 des sources vidzy
+          const vidzySources = fstreamProcessedSources.filter(source =>
+            source.url.toLowerCase().includes('vidzy')
+          );
+
+          if (vidzySources.length > 0) {
+            console.log(`🎬 Found ${vidzySources.length} vidzy sources, extracting M3U8...`);
+            vidzySources.forEach(vidzySource => {
+              fstreamExtractionPromises.push(
+                extractVidzyM3u8(vidzySource.url, MAIN_API).then(result => ({
+                  type: 'vidzy',
+                  result,
+                  originalSource: vidzySource
+                }))
+              );
+            });
+          }
+
+          // Extraire M3U8 des sources fsvid
+          const fsvidSourcesForExtraction = fsvidSources;
+
+          if (fsvidSourcesForExtraction.length > 0) {
+            console.log(`🎬 Found ${fsvidSourcesForExtraction.length} fsvid sources, extracting M3U8...`);
+            fsvidSourcesForExtraction.forEach(fsvidSource => {
+              fstreamExtractionPromises.push(
+                extractFsvidM3u8(fsvidSource.url, MAIN_API).then(result => ({
+                  type: 'fsvid',
+                  result,
+                  originalSource: fsvidSource
+                }))
+              );
+            });
+          }
+
+          if (fstreamExtractionPromises.length > 0) {
+            const fstreamExtractionResults = await Promise.all(fstreamExtractionPromises);
+
+            // Séparer les sources fsvid et vidzy pour les ordonner correctement
+            const fsvidHlsSources: { url: string; label: string; category: string }[] = [];
+            const vidzyHlsSources: { url: string; label: string; category: string }[] = [];
+
+            fstreamExtractionResults.forEach(({ type, result, originalSource }) => {
+              if (type === 'fsvid' && result?.success && result.m3u8Url) {
+                // Vérifier si une source fsvid pour cette catégorie existe déjà
+                const existingFsvid = fsvidHlsSources.find(s => s.category === originalSource.category);
+                if (!existingFsvid) {
+                  fsvidHlsSources.push({
+                    url: result.m3u8Url,
+                    label: `${originalSource.category} - Fsvid HLS`,
+                    category: originalSource.category
+                  });
+                  console.log(`✅ Added Fsvid HLS source: ${result.m3u8Url}`);
+                } else {
+                  console.log(`⚠️ Skipping duplicate Fsvid HLS source for category ${originalSource.category}`);
+                }
+              } else if (type === 'vidzy' && result?.success && result.m3u8Url) {
+                vidzyHlsSources.push({
+                  url: result.m3u8Url,
+                  label: `${originalSource.category} - Vidzy HLS`,
+                  category: originalSource.category
+                });
+                console.log(`✅ Added Vidzy HLS source: ${result.m3u8Url}`);
+              }
+            });
+
+            // Ajouter fsvid en premier, puis vidzy
+            fstreamHlsSources.push(...fsvidHlsSources, ...vidzyHlsSources);
+          }
+
+          console.log(`🎯 FStream TV HLS sources extracted: ${fstreamHlsSources.length}`);
+        } else {
+          setFstreamData(null);
+          console.log('❌ No FStream TV sources available');
+        }
+
+        setFstreamSources(fstreamProcessedSources);
+
+        // =========== TRAITEMENT DES RÉSULTATS WIFLIX (LYNX) ===========
+        let wiflixProcessedSources: { url: string; label: string; category: string }[] = [];
+
+        if (wiflixResult && wiflixResult.success && wiflixResult.episodes) {
+          console.log('🎬 Processing Wiflix/Lynx TV result:', wiflixResult);
+          setWiflixData(wiflixResult);
+
+          // Get the specific episode data
+          const episodeData = wiflixResult.episodes[episodeNumber.toString()];
+          if (episodeData) {
+            // Process Wiflix categories with priority to VF sources
+            const categories = ['vf', 'vostfr'];
+            const vfSources: { url: string; label: string; category: string }[] = [];
+            const vostfrSources: { url: string; label: string; category: string }[] = [];
+
+            categories.forEach(category => {
+              const categoryPlayers = episodeData[category as keyof typeof episodeData] || [];
+              categoryPlayers.forEach((player: any) => {
+                const source = {
+                  url: player.url,
+                  label: `Lynx ${category.toUpperCase()} - ${player.name}`,
+                  category: category.toUpperCase()
+                };
+
+                if (category === 'vf') {
+                  vfSources.push(source);
+                } else {
+                  vostfrSources.push(source);
+                }
+              });
+            });
+
+            // Mettre les sources VF en premier
+            wiflixProcessedSources = [...vfSources, ...vostfrSources];
+
+            console.log('✅ Wiflix/Lynx TV sources processed:', wiflixProcessedSources.length);
+            console.log('🎯 Wiflix VF sources found:', vfSources.length);
+
+            // =========== EXTRACTION ONEUPLOAD DEPUIS WIFLIX TV ===========
+            console.log('🔍 Extracting OneUpload sources from Wiflix TV...');
+
+            // Identifier les sources OneUpload dans Wiflix
+            const oneUploadSources = wiflixProcessedSources.filter(source =>
+              isOneUploadEmbed(source.url)
+            );
+
+            if (oneUploadSources.length > 0) {
+              console.log(`🎬 Found ${oneUploadSources.length} OneUpload sources in Wiflix TV, extracting...`);
+
+              // Paralléliser les extractions OneUpload
+              const oneUploadExtractionPromises = oneUploadSources.map(async (oneUploadSource) => {
+                try {
+                  const result = await extractOneUploadSources(oneUploadSource.url);
+                  return { result, originalSource: oneUploadSource };
+                } catch (error) {
+                  console.error('Error extracting OneUpload source:', error);
+                  return { result: null, originalSource: oneUploadSource };
+                }
+              });
+
+              const oneUploadExtractionResults = await Promise.all(oneUploadExtractionPromises);
+
+              // Traiter les résultats OneUpload et les ajouter aux sources Nexus
+              oneUploadExtractionResults.forEach(({ result, originalSource }) => {
+                if (result?.success) {
+                  if (result.hlsUrl) {
+                    // Source HLS trouvée
+                    finalHlsSources.push({
+                      url: result.hlsUrl,
+                      label: `Nexus ${originalSource.category} - OneUpload HLS`
+                    });
+                    console.log(`✅ Added OneUpload HLS source: ${result.hlsUrl}`);
+                  } else if (result.m3u8Url) {
+                    // Source MP4 ou autre trouvée
+                    finalFileSources.push({
+                      url: result.m3u8Url,
+                      label: `Nexus ${originalSource.category} - OneUpload`
+                    });
+                    console.log(`✅ Added OneUpload file source: ${result.m3u8Url}`);
+                  }
+                } else {
+                  console.log(`❌ Failed to extract OneUpload source: ${originalSource.url}`);
+                }
+              });
+
+              console.log(`✅ OneUpload extraction completed. HLS sources: ${finalHlsSources.length}, File sources: ${finalFileSources.length}`);
+            } else {
+              console.log('ℹ️ No OneUpload sources found in Wiflix TV');
+            }
+
+            // =========== EXTRACTION VOE DEPUIS WIFLIX TV ===========
+            console.log('🔍 Extracting VOE sources from Wiflix TV...');
+
+            // Identifier les sources VOE dans Wiflix
+            const voeSources = wiflixProcessedSources.filter(source =>
+              isVoeEmbed(source.url)
+            );
+
+            if (voeSources.length > 0) {
+              console.log(`🎬 Found ${voeSources.length} VOE sources in Wiflix TV, extracting...`);
+
+              // Paralléliser les extractions VOE
+              const voeExtractionPromises = voeSources.map(async (voeSource) => {
+                try {
+                  console.log(`[VOE/WIFLIX][TV] Extracting VOE m3u8 from Wiflix link: ${voeSource.url}`);
+                  const voeResult = await extractVoeM3u8(voeSource.url);
+                  return { result: voeResult, originalSource: voeSource };
+                } catch (error) {
+                  console.error('Error extracting VOE source:', error);
+                  return { result: null, originalSource: voeSource };
+                }
+              });
+
+              const voeExtractionResults = await Promise.all(voeExtractionPromises);
+
+              // Traiter les résultats VOE et les ajouter aux sources HLS
+              const validVoeResults: { url: string; label: string }[] = [];
+              voeExtractionResults.forEach(({ result, originalSource }) => {
+                if (result?.success && result.hlsUrl) {
+                  validVoeResults.push({
+                    url: result.hlsUrl,
+                    label: `Voe HLS ${originalSource.category}`
+                  });
+                  console.log(`✅ Added VOE HLS source: ${result.hlsUrl}`);
+                } else {
+                  console.log(`❌ Failed to extract VOE source: ${originalSource.url}`);
+                }
+              });
+
+              if (validVoeResults.length > 0) {
+                // Prioriser les sources VF puis VOSTFR pour VOE
+                const voeVfSources = validVoeResults.filter(s => s.label.includes('VF'));
+                const voeVostfrSources = validVoeResults.filter(s => s.label.includes('VOSTFR'));
+                const prioritizedVoeSources = [...voeVfSources, ...voeVostfrSources];
+
+                finalHlsSources = [...prioritizedVoeSources, ...finalHlsSources];
+                console.log(`✅ VOE extraction completed. Added ${validVoeResults.length} VOE HLS sources to final sources`);
+              } else {
+                console.log('❌ No valid VOE sources extracted from Wiflix TV');
+              }
+            } else {
+              console.log('ℹ️ No VOE sources found in Wiflix TV');
+            }
+
+            // =========== EXTRACTION UQLOAD DEPUIS WIFLIX TV ===========
+            console.log('🔍 Extracting UQLOAD sources from Wiflix TV...');
+
+            // Identifier les sources UQLOAD dans Wiflix
+            const uqloadSources = wiflixProcessedSources.filter(source =>
+              source.url.toLowerCase().includes('uqload')
+            );
+
+            if (uqloadSources.length > 0) {
+              console.log(`🎬 Found ${uqloadSources.length} UQLOAD sources in Wiflix TV, extracting...`);
+
+              // Paralléliser les extractions UQLOAD
+              const uqloadExtractionPromises = uqloadSources.map(async (uqloadSource) => {
+                try {
+                  console.log(`[UQLOAD/WIFLIX][TV] Extracting UQLOAD file from Wiflix link: ${uqloadSource.url}`);
+                  const uqloadResult = await extractUqloadFile(normalizeUqloadEmbedUrl(uqloadSource.url), MAIN_API);
+                  return { result: uqloadResult, originalSource: uqloadSource };
+                } catch (error) {
+                  console.error('Error extracting UQLOAD source:', error);
+                  return { result: null, originalSource: uqloadSource };
+                }
+              });
+
+              const uqloadExtractionResults = await Promise.all(uqloadExtractionPromises);
+
+              // Traiter les résultats UQLOAD et les ajouter aux sources File
+              const validUqloadResults: { url: string; label: string }[] = [];
+              uqloadExtractionResults.forEach(({ result, originalSource }) => {
+                if (result?.success && result.m3u8Url) {
+                  validUqloadResults.push({
+                    url: result.m3u8Url,
+                    label: `Uqload ${originalSource.category}`
+                  });
+                  console.log(`✅ Added UQLOAD file source: ${result.m3u8Url}`);
+                } else {
+                  console.log(`❌ Failed to extract UQLOAD source: ${originalSource.url}`);
+                }
+              });
+
+              if (validUqloadResults.length > 0) {
+                // Prioriser les sources VF puis VOSTFR pour UQLOAD
+                const uqloadVfSources = validUqloadResults.filter(s => s.label.includes('VF'));
+                const uqloadVostfrSources = validUqloadResults.filter(s => s.label.includes('VOSTFR'));
+                const prioritizedUqloadSources = [...uqloadVfSources, ...uqloadVostfrSources];
+
+                finalFileSources = [...prioritizedUqloadSources, ...finalFileSources];
+                console.log(`✅ UQLOAD extraction completed. Added ${validUqloadResults.length} UQLOAD file sources to final sources`);
+              } else {
+                console.log('❌ No valid UQLOAD sources extracted from Wiflix TV');
+              }
+            } else {
+              console.log('ℹ️ No UQLOAD sources found in Wiflix TV');
+            }
+
+            // =========== EXTRACTION DOODSTREAM DEPUIS WIFLIX TV ===========
+            console.log('🔍 Extracting DoodStream sources from Wiflix TV...');
+
+            const doodStreamSources = wiflixProcessedSources.filter(source =>
+              isDoodStreamEmbed(source.url)
+            );
+
+            if (doodStreamSources.length > 0) {
+              console.log(`🎬 Found ${doodStreamSources.length} DoodStream sources in Wiflix TV, extracting...`);
+
+              const doodExtractionPromises = doodStreamSources.map(async (doodSource) => {
+                try {
+                  console.log(`[DOODSTREAM/WIFLIX][TV] Extracting DoodStream from Wiflix link: ${doodSource.url}`);
+                  const doodResult = await extractDoodStreamFile(doodSource.url);
+                  return { result: doodResult, originalSource: doodSource };
+                } catch (error) {
+                  console.error('Error extracting DoodStream source:', error);
+                  return { result: null, originalSource: doodSource };
+                }
+              });
+
+              const doodExtractionResults = await Promise.all(doodExtractionPromises);
+
+              const validDoodResults: { url: string; label: string }[] = [];
+              doodExtractionResults.forEach(({ result, originalSource }) => {
+                if (result?.success && result.m3u8Url) {
+                  validDoodResults.push({
+                    url: result.m3u8Url,
+                    label: `DoodStream ${originalSource.category}`
+                  });
+                  console.log(`✅ Added DoodStream source: ${result.m3u8Url}`);
+                }
+              });
+
+              if (validDoodResults.length > 0) {
+                const doodVfSources = validDoodResults.filter(s => s.label.includes('VF'));
+                const doodVostfrSources = validDoodResults.filter(s => s.label.includes('VOSTFR'));
+                finalFileSources = [...doodVfSources, ...doodVostfrSources, ...finalFileSources];
+                console.log(`✅ DoodStream extraction completed. Added ${validDoodResults.length} sources.`);
+              }
+            } else {
+              console.log('ℹ️ No DoodStream sources found in Wiflix TV');
+            }
+
+            // =========== EXTRACTION SEEKSTREAMING DEPUIS WIFLIX TV ===========
+            console.log('🔍 Extracting SeekStreaming sources from Wiflix TV...');
+
+            const seekStreamingSources = wiflixProcessedSources.filter(source =>
+              isSeekStreamingEmbed(source.url)
+            );
+
+            if (seekStreamingSources.length > 0) {
+              console.log(`🎬 Found ${seekStreamingSources.length} SeekStreaming sources in Wiflix TV, extracting...`);
+
+              const seekExtractionPromises = seekStreamingSources.map(async (seekSource) => {
+                try {
+                  console.log(`[SEEKSTREAMING/WIFLIX][TV] Extracting SeekStreaming from Wiflix link: ${seekSource.url}`);
+                  const seekResult = await extractSeekStreamingM3u8(seekSource.url);
+                  return { result: seekResult, originalSource: seekSource };
+                } catch (error) {
+                  console.error('Error extracting SeekStreaming source:', error);
+                  return { result: null, originalSource: seekSource };
+                }
+              });
+
+              const seekExtractionResults = await Promise.all(seekExtractionPromises);
+
+              const validSeekResults: { url: string; label: string }[] = [];
+              seekExtractionResults.forEach(({ result, originalSource }) => {
+                if (result?.success && result.hlsUrl) {
+                  validSeekResults.push({
+                    url: result.hlsUrl,
+                    label: `SeekStreaming HLS ${originalSource.category}`
+                  });
+                  console.log(`✅ Added SeekStreaming HLS source: ${result.hlsUrl}`);
+                }
+              });
+
+              if (validSeekResults.length > 0) {
+                const seekVfSources = validSeekResults.filter(s => s.label.includes('VF'));
+                const seekVostfrSources = validSeekResults.filter(s => s.label.includes('VOSTFR'));
+                finalHlsSources = [...seekVfSources, ...seekVostfrSources, ...finalHlsSources];
+                console.log(`✅ SeekStreaming extraction completed. Added ${validSeekResults.length} sources.`);
+              }
+            } else {
+              console.log('ℹ️ No SeekStreaming sources found in Wiflix TV');
+            }
+          }
+        } else {
+          setWiflixData(null);
+          console.log('❌ No Wiflix/Lynx TV sources available');
+        }
+
+        setWiflixSources(wiflixProcessedSources);
+        console.log('🎯 [WatchTv] Wiflix/Lynx TV sources set:', wiflixProcessedSources.length, wiflixProcessedSources);
+
+        // =========== TRAITEMENT DES RÉSULTATS VIPER ===========
+        const viperProcessedSources: { url: string; label: string; quality: string; language: string }[] = [];
+        if (viperResult && viperResult.links) {
+          console.log('🎬 Processing Viper TV result:', viperResult);
+          setViperData(viperResult);
+
+          const vfLinks = viperResult.links.vf || [];
+          const vostfrLinks = viperResult.links.vostfr || [];
+
+          vfLinks.forEach((link: { server: string; url: string }) => {
+            viperProcessedSources.push({
+              url: link.url,
+              label: link.server,
+              quality: 'HD',
+              language: 'VF'
+            });
+          });
+
+          vostfrLinks.forEach((link: { server: string; url: string }) => {
+            viperProcessedSources.push({
+              url: link.url,
+              label: link.server,
+              quality: 'HD',
+              language: 'VOSTFR'
+            });
+          });
+
+          setViperSources(viperProcessedSources);
+          console.log(`✅ Viper TV sources processed: ${viperProcessedSources.length}`);
+
+          // =========== EXTRACTION VOE DEPUIS VIPER ===========
+          if (viperProcessedSources.length > 0) {
+            console.log('🔍 Extracting VOE sources from Viper...');
+
+            // Identifier les sources VOE dans Viper (soit par label, soit par URL)
+            const voeViperSources = viperProcessedSources.filter(source =>
+              source.label.toLowerCase().includes('voe') || isVoeEmbed(source.url)
+            );
+
+            if (voeViperSources.length > 0) {
+              console.log(`🎬 Found ${voeViperSources.length} VOE sources in Viper, extracting...`);
+
+              // Paralléliser les extractions VOE
+              const voeExtractionPromises = voeViperSources.map(async (voeSource) => {
+                try {
+                  console.log(`[VOE/VIPER][TV] Extracting VOE m3u8 from Viper link: ${voeSource.url}`);
+                  const voeResult = await extractVoeM3u8(voeSource.url);
+                  return { result: voeResult, originalSource: voeSource };
+                } catch (error) {
+                  console.error('Error extracting VOE source from Viper:', error);
+                  return { result: null, originalSource: voeSource };
+                }
+              });
+
+              const voeExtractionResults = await Promise.all(voeExtractionPromises);
+
+              // Traiter les résultats VOE et les ajouter aux sources HLS
+              const validVoeResults: { url: string; label: string }[] = [];
+              voeExtractionResults.forEach(({ result, originalSource }) => {
+                if (result?.success && result.hlsUrl) {
+                  validVoeResults.push({
+                    url: result.hlsUrl,
+                    label: `Voe HLS ${originalSource.language}`
+                  });
+                  console.log(`✅ Added Viper VOE HLS source: ${result.hlsUrl}`);
+                } else {
+                  console.log(`❌ Failed to extract Viper VOE source: ${originalSource.url}`);
+                }
+              });
+
+              if (validVoeResults.length > 0) {
+                // Prioriser VF
+                const vf = validVoeResults.filter(s => s.label.includes('VF'));
+                const vostfr = validVoeResults.filter(s => s.label.includes('VOSTFR'));
+
+                finalHlsSources = [...vf, ...vostfr, ...finalHlsSources];
+                console.log(`✅ Viper VOE extraction completed. Added ${validVoeResults.length} sources.`);
+              }
+            }
+          }
+
+          // =========== EXTRACTION UQLOAD DEPUIS VIPER ===========
+          if (viperProcessedSources.length > 0) {
+            console.log('🔍 Extracting UQLOAD sources from Viper...');
+
+            // Identifier les sources UQLOAD dans Viper
+            const uqloadViperSources = viperProcessedSources.filter(source =>
+              source.label.toLowerCase().includes('uqload') || source.url.toLowerCase().includes('uqload')
+            );
+
+            if (uqloadViperSources.length > 0) {
+              console.log(`🎬 Found ${uqloadViperSources.length} UQLOAD sources in Viper, extracting...`);
+
+              // Paralléliser les extractions UQLOAD
+              const uqloadExtractionPromises = uqloadViperSources.map(async (uqloadSource) => {
+                try {
+                  console.log(`[UQLOAD/VIPER][TV] Extracting UQLOAD file from Viper link: ${uqloadSource.url}`);
+                  const uqloadResult = await extractUqloadFile(normalizeUqloadEmbedUrl(uqloadSource.url), MAIN_API);
+                  return { result: uqloadResult, originalSource: uqloadSource };
+                } catch (error) {
+                  console.error('Error extracting UQLOAD source from Viper:', error);
+                  return { result: null, originalSource: uqloadSource };
+                }
+              });
+
+              const uqloadExtractionResults = await Promise.all(uqloadExtractionPromises);
+
+              // Traiter les résultats UQLOAD et les ajouter aux sources
+              const validUqloadResults: { url: string; label: string }[] = [];
+              uqloadExtractionResults.forEach(({ result, originalSource }) => {
+                if (result?.success && (result.hlsUrl || result.m3u8Url)) {
+                  const extractedUrl = result.hlsUrl || result.m3u8Url || '';
+                  validUqloadResults.push({
+                    url: extractedUrl,
+                    label: `Uqload ${originalSource.language}`
+                  });
+                  console.log(`✅ Added Viper UQLOAD source: ${extractedUrl}`);
+                } else {
+                  console.log(`❌ Failed to extract Viper UQLOAD source: ${originalSource.url}`);
+                }
+              });
+
+              if (validUqloadResults.length > 0) {
+                // Prioriser VF
+                const vf = validUqloadResults.filter(s => s.label.includes('VF'));
+                const vostfr = validUqloadResults.filter(s => s.label.includes('VOSTFR'));
+
+                finalHlsSources = [...finalHlsSources, ...vf, ...vostfr];
+                console.log(`✅ Viper UQLOAD extraction completed. Added ${validUqloadResults.length} sources.`);
+              }
+            }
+          }
+
+          // =========== EXTRACTION DOODSTREAM DEPUIS VIPER ===========
+          if (viperProcessedSources.length > 0) {
+            const doodViperSources = viperProcessedSources.filter(source =>
+              source.label.toLowerCase().includes('dood') || isDoodStreamEmbed(source.url)
+            );
+
+            if (doodViperSources.length > 0) {
+              console.log(`🎬 Found ${doodViperSources.length} DoodStream sources in Viper, extracting...`);
+
+              const doodExtractionPromises = doodViperSources.map(async (doodSource) => {
+                try {
+                  const doodResult = await extractDoodStreamFile(doodSource.url);
+                  return { result: doodResult, originalSource: doodSource };
+                } catch (error) {
+                  console.error('Error extracting DoodStream source from Viper:', error);
+                  return { result: null, originalSource: doodSource };
+                }
+              });
+
+              const doodExtractionResults = await Promise.all(doodExtractionPromises);
+              const validDoodResults: { url: string; label: string }[] = [];
+              doodExtractionResults.forEach(({ result, originalSource }) => {
+                if (result?.success && result.m3u8Url) {
+                  validDoodResults.push({
+                    url: result.m3u8Url,
+                    label: `DoodStream ${originalSource.language}`
+                  });
+                }
+              });
+
+              if (validDoodResults.length > 0) {
+                const vf = validDoodResults.filter(s => s.label.includes('VF'));
+                const vostfr = validDoodResults.filter(s => s.label.includes('VOSTFR'));
+                finalFileSources = [...vf, ...vostfr, ...finalFileSources];
+                console.log(`✅ Viper DoodStream extraction completed. Added ${validDoodResults.length} sources.`);
+              }
+            }
+          }
+
+          // =========== EXTRACTION SEEKSTREAMING DEPUIS VIPER ===========
+          if (viperProcessedSources.length > 0) {
+            const seekViperSources = viperProcessedSources.filter(source =>
+              source.label.toLowerCase().includes('seekstream') || source.label.toLowerCase().includes('embed4me') || isSeekStreamingEmbed(source.url)
+            );
+
+            if (seekViperSources.length > 0) {
+              console.log(`🎬 Found ${seekViperSources.length} SeekStreaming sources in Viper, extracting...`);
+
+              const seekExtractionPromises = seekViperSources.map(async (seekSource) => {
+                try {
+                  const seekResult = await extractSeekStreamingM3u8(seekSource.url);
+                  return { result: seekResult, originalSource: seekSource };
+                } catch (error) {
+                  console.error('Error extracting SeekStreaming source from Viper:', error);
+                  return { result: null, originalSource: seekSource };
+                }
+              });
+
+              const seekExtractionResults = await Promise.all(seekExtractionPromises);
+              const validSeekResults: { url: string; label: string }[] = [];
+              seekExtractionResults.forEach(({ result, originalSource }) => {
+                if (result?.success && result.hlsUrl) {
+                  validSeekResults.push({
+                    url: result.hlsUrl,
+                    label: `SeekStreaming HLS ${originalSource.language}`
+                  });
+                }
+              });
+
+              if (validSeekResults.length > 0) {
+                const vf = validSeekResults.filter(s => s.label.includes('VF'));
+                const vostfr = validSeekResults.filter(s => s.label.includes('VOSTFR'));
+                finalHlsSources = [...vf, ...vostfr, ...finalHlsSources];
+                console.log(`✅ Viper SeekStreaming extraction completed. Added ${validSeekResults.length} sources.`);
+              }
+            }
+          }
+        } else {
+          setViperData(null);
+          setViperSources([]);
+        }
+
+        // =========== TRAITEMENT DES RÉSULTATS VOX ===========
+        let voxProcessedSources: { name: string; link: string }[] = [];
+        if (voxResult && voxResult.success && voxResult.data && voxResult.data.length > 0) {
+          console.log('Vox sources found:', voxResult.data.length);
+          setVoxData(voxResult);
+          voxProcessedSources = voxResult.data;
+          setVoxSources(voxProcessedSources);
+
+          // =========== EXTRACTION VOE/VIDMOLY DEPUIS VOX ===========
+          if (voxProcessedSources.length > 0) {
+            console.log('🔍 Extracting Voe/Vidmoly sources from Vox...');
+            const voeVoxSources = voxProcessedSources.filter(s => s.name.toLowerCase().includes('voe'));
+
+            if (voeVoxSources.length > 0) {
+              console.log(`🎬 Found ${voeVoxSources.length} VOE sources in Vox, extracting...`);
+
+              const voeExtractionPromises = voeVoxSources.map(async (voeSource) => {
+                try {
+                  console.log(`[VOE/VOX][TV] Extracting VOE m3u8 from Vox link: ${voeSource.link}`);
+                  const voeResult = await extractVoeM3u8(voeSource.link);
+                  return { result: voeResult, originalSource: voeSource };
+                } catch (error) {
+                  console.error('Error extracting VOE source from Vox:', error);
+                  return { result: null, originalSource: voeSource };
+                }
+              });
+
+              const voeExtractionResults = await Promise.all(voeExtractionPromises);
+
+              const validVoeResults: { url: string; label: string }[] = [];
+              voeExtractionResults.forEach(({ result }) => {
+                if (result?.success && result.hlsUrl) {
+                  validVoeResults.push({
+                    url: result.hlsUrl,
+                    label: 'Voe (Vox) HLS'
+                  });
+                  console.log(`✅ Added Vox VOE HLS source: ${result.hlsUrl}`);
+                }
+              });
+
+              if (validVoeResults.length > 0) {
+                finalHlsSources = [...finalHlsSources, ...validVoeResults];
+              }
+            }
+
+            // =========== EXTRACTION VIDMOLY DEPUIS VOX ===========
+            const vidmolyVoxSources = voxProcessedSources.filter(s => s.name.toLowerCase().includes('vidmoly'));
+            if (vidmolyVoxSources.length > 0) {
+              console.log(`🎬 Found ${vidmolyVoxSources.length} Vidmoly sources in Vox, extracting...`);
+              const vidmolyExtractionPromises = vidmolyVoxSources.map(async (vidmolySource) => {
+                try {
+                  console.log(`[VIDMOLY/VOX][TV] Extracting Vidmoly M3U8 from Vox link: ${vidmolySource.link}`);
+                  const vidmolyResult = await extractVidmolyM3u8(vidmolySource.link, MAIN_API);
+                  return { result: vidmolyResult, originalSource: vidmolySource };
+                } catch (error) {
+                  console.error('Error extracting Vidmoly source from Vox:', error);
+                  return { result: null, originalSource: vidmolySource };
+                }
+              });
+
+              const vidmolyExtractionResults = await Promise.all(vidmolyExtractionPromises);
+              const validVidmolyResults: { url: string; label: string }[] = [];
+              vidmolyExtractionResults.forEach(({ result }) => {
+                if (result?.success && result.m3u8Url) {
+                  validVidmolyResults.push({
+                    url: result.m3u8Url,
+                    label: 'Vidmoly (Vox) HLS'
+                  });
+                  console.log(`✅ Added Vox Vidmoly HLS source: ${result.m3u8Url}`);
+                }
+              });
+
+              if (validVidmolyResults.length > 0) {
+                finalHlsSources = [...finalHlsSources, ...validVidmolyResults];
+              }
+            }
+          }
+        } else {
+          console.log('Vox source not available from API');
+          setVoxData(null);
+          setVoxSources([]);
+        }
+
+
+
+        // Ajouter les sources HLS FStream aux sources finales
+        if (fstreamHlsSources.length > 0) {
+          // Prioriser les sources VF puis Default pour FStream HLS
+          const fsvidVfSources = fstreamHlsSources.filter(s => s.category === 'VF');
+          const fsvidDefaultSources = fstreamHlsSources.filter(s => s.category === 'Default');
+          const fsvidOtherSources = fstreamHlsSources.filter(s => s.category !== 'VF' && s.category !== 'Default');
+
+          const prioritizedFstreamHls = [...fsvidVfSources, ...fsvidDefaultSources, ...fsvidOtherSources];
+          finalHlsSources = [...prioritizedFstreamHls, ...finalHlsSources];
+          console.log(`🎯 Added ${fstreamHlsSources.length} FStream TV HLS sources to final sources`);
+        }
+
+        // Set the final sources
+        setNexusHlsSources(finalHlsSources);
+        setNexusFileSources(finalFileSources);
+
+        // =========== FIN DES EXTRACTIONS ===========
+        console.log('✅ Extractions M3U8 terminées');
+        setLoadingExtractions(false);
+
+        // Check for Sibnet links for anime
+        if (showDetails.genres.some((genre: any) => genre.id === 16)) { // 16 is Animation genre
+          setLoadingSibnet(true);
+          try {
+            // Try to get episode ID from URL or elsewhere
+            const sibnetVideoId = extractSibnetIdFromUrl();
+            if (sibnetVideoId) {
+              const sibnetSourceUrl = await checkSibnetAvailability(sibnetVideoId);
+              setSibnetUrl(sibnetSourceUrl);
+            }
+          } catch (error) {
+            console.error('Error checking Sibnet availability:', error);
+          } finally {
+            setLoadingSibnet(false);
+          }
+        }
+
+        // ========== DETERMINE DEFAULT SELECTED SOURCE (Harmonized with WatchMovie.tsx) ==========
+        // Priorité : embedseek (custom) > nexus (hls/file) > darkino > m3u8 (adFree) > mp4 > fstream > omega > wiflix > viper > coflix > frembed > custom > vox > vostfr
+
+        console.log('=== TV SOURCE PRIORITY LOGIC ===');
+        console.log('Final HLS sources (Nexus + FStream + extracted):', finalHlsSources.length);
+        console.log('Final File sources (Nexus + extracted):', finalFileSources.length);
+        console.log('Darkino available:', darkinoResult && typeof darkinoResult === 'object' ? darkinoResult.available : false);
+        console.log('Darkino sources count:', darkinoResult && typeof darkinoResult === 'object' ? darkinoResult.sources?.length : 0);
+        console.log('FStream HLS sources extracted:', fstreamHlsSources.length);
+        console.log('Wiflix/Lynx sources available:', wiflixProcessedSources.length);
+        console.log('Custom sources available:', customLinksResult.customLinks?.length || 0);
+
+        // PRIORITÉ 1: Vérifier si un lien embedseek existe dans les custom sources
+        const embedseekLink = customLinksResult.customLinks?.find((link: string) =>
+          link.toLowerCase().includes('embedseek.com')
+        );
+
+        if (finalHlsSources.length > 0) {
+          // Vérifier si la première source est FStream HLS
+          const firstSource = finalHlsSources[0];
+          if (firstSource.label && (firstSource.label.includes('Vidzy HLS') || firstSource.label.includes('Fsvid HLS'))) {
+            console.log('✅ Selecting FSTREAM HLS as primary source');
+            console.log('🎯 Selected HLS URL:', firstSource.url);
+            console.log('🏷️ Selected HLS Label:', firstSource.label);
+            setSelectedSource('nexus_hls'); // Utiliser nexus_hls pour les sources HLS
+            setSelectedNexusHlsSource(0);
+            setVideoSource(firstSource.url);
+            currentSourceRef.current = 'nexus_hls';
+            setEmbedUrl(null);
+            setEmbedType(null);
+            setOnlyVostfrAvailable(false);
+          } else {
+            console.log('✅ Selecting NEXUS HLS as primary source');
+            console.log('🎯 Selected HLS URL:', firstSource.url);
+            console.log('🏷️ Selected HLS Label:', firstSource.label);
+            setSelectedSource('nexus_hls');
+            setSelectedNexusHlsSource(0);
+            setVideoSource(firstSource.url);
+            currentSourceRef.current = 'nexus_hls';
+            setEmbedUrl(null);
+            setEmbedType(null);
+            setOnlyVostfrAvailable(false);
+          }
+        } else if (embedseekLink) {
+          console.log('✅ Selecting EMBEDSEEK (Custom) as PRIMARY source');
+          console.log('🎯 Selected Embedseek URL:', embedseekLink);
+          setSelectedSource('custom');
+          setEmbedUrl(embedseekLink);
+          setEmbedType('custom');
+          currentSourceRef.current = 'custom';
+          setOnlyVostfrAvailable(false);
+        } else if (finalFileSources.length > 0) {
+          console.log('✅ Selecting NEXUS FILE as primary source');
+          setSelectedSource('nexus_file');
+          setSelectedNexusFileSource(0);
+          setVideoSource(finalFileSources[0].url);
+          currentSourceRef.current = 'nexus_file';
+          setEmbedUrl(null);
+          setEmbedType(null);
+          setOnlyVostfrAvailable(false);
+        } else if (fetchedMp4Sources.length > 0) {
+          setSelectedSource('mp4');
+          setSelectedMp4Source(0);
+          setVideoSource(fetchedMp4Sources[0].url);
+          currentSourceRef.current = 'mp4';
+          setEmbedUrl(null);
+          setEmbedType(null);
+          setOnlyVostfrAvailable(false);
+        } else if (darkinoResult && darkinoResult.available && darkinoResult.sources.length > 0) {
+          console.log('✅ Selecting DARKINO as fallback source');
+          setSelectedSource('darkino');
+          setSelectedDarkinoSource(0);
+          setEmbedUrl(null);
+          setEmbedType(null);
+        } else if (adFreeM3u8Url) {
+          console.log('✅ Selecting AD-FREE M3U8 as fallback source');
+          setSelectedSource('m3u8');
+          setVideoSource(adFreeM3u8Url);
+          currentSourceRef.current = 'm3u8';
+          setEmbedUrl(null);
+          setEmbedType(null);
+        } else if (fetchedMp4Sources.length > 0) {
+          console.log('✅ Selecting MP4 as fallback source');
+          setSelectedSource('mp4');
+          setSelectedMp4Source(0);
+          setVideoSource(fetchedMp4Sources[0].url);
+          currentSourceRef.current = 'mp4';
+          setEmbedUrl(null);
+          setEmbedType(null);
+        } else if (fstreamProcessedSources.length > 0) {
+          // Chercher la première source fsvid ou prendre la première source disponible
+          const fsvidSource = fstreamProcessedSources.find(source => source.url.toLowerCase().includes('fsvid'));
+          const selectedIndex = fsvidSource ? fstreamProcessedSources.indexOf(fsvidSource) : 0;
+
+          console.log('✅ Selecting FSTREAM as fallback source', fsvidSource ? '(fsvid detected)' : '(other player)');
+          setSelectedSource('fstream');
+          setSelectedFstreamSource(selectedIndex);
+          setEmbedUrl(getProxyUrl(fstreamProcessedSources[selectedIndex].url));
+          setEmbedType('fstream');
+          currentSourceRef.current = 'fstream';
+          setOnlyVostfrAvailable(false);
+        } else {
+          // Omega: cherche Supervideo en priorité
+          let supervideo = null;
+          if (rawOmegaData && rawOmegaData.player_links) {
+            supervideo = rawOmegaData.player_links.find((p: any) => p.player && p.player.toLowerCase().includes('supervideo'));
+          } else if (rawOmegaData && rawOmegaData.type === 'tv') {
+            const omegaPlayers = extractOmegaPlayers(rawOmegaData, seasonNumber, episodeNumber);
+            supervideo = omegaPlayers.find((p: any) => p.player && p.player.toLowerCase().includes('supervideo'));
+          }
+          if (supervideo && rawOmegaData) {
+            setSelectedSource('omega');
+            setEmbedUrl(supervideo.link);
+            setEmbedType('omega');
+            currentSourceRef.current = 'omega';
+          } else if (wiflixProcessedSources.length > 0) {
+            console.log('✅ Selecting WIFLIX/LYNX as fallback source');
+            setSelectedSource('wiflix');
+            setSelectedWiflixSource(0);
+            setEmbedUrl(wiflixProcessedSources[0].url);
+            setEmbedType('wiflix');
+            currentSourceRef.current = 'wiflix';
+            setOnlyVostfrAvailable(false);
+          } else if (viperProcessedSources.length > 0) {
+            console.log('✅ Selecting VIPER as fallback source');
+            setSelectedSource('viper' as any);
+            setSelectedViperSource(0);
+            setEmbedUrl(viperProcessedSources[0].url);
+            setEmbedType('viper');
+            currentSourceRef.current = 'viper';
+            setOnlyVostfrAvailable(false);
+          } else {
+            // Coflix: prefer lecteur6 / French multi links, but treat any multi links as a valid coflix embed
+            let multiLinks = [];
+            if (coflixResult) {
+              multiLinks = (coflixResult.current_episode && coflixResult.current_episode.player_links)
+                ? coflixResult.current_episode.player_links
+                : coflixResult.player_links || [];
+            }
+            const hasLecteur6 = multiLinks.some((p: any) => getCoflixPreferredUrl(p).toLowerCase().includes('lecteur6'));
+
+            if (multiLinks.length > 0) {
+              // If there are multi links and we also have mp4 sources, prefer mp4 (same behaviour as before)
+              if (!hasLecteur6 && fetchedMp4Sources.length > 0) {
+                setSelectedSource('mp4');
+                setSelectedMp4Source(0);
+                setVideoSource(fetchedMp4Sources[0].url);
+                currentSourceRef.current = 'mp4';
+                setEmbedUrl(null);
+                setEmbedType(null);
+              } else {
+                // Prefer a French-labelled or lecteur6 link when available, otherwise use the first multi link
+                const preferred = multiLinks.find((p: any) =>
+                  (p.language && typeof p.language === 'string' && p.language.toLowerCase().includes('french')) ||
+                  (p.quality && typeof p.quality === 'string' && p.quality.toLowerCase().includes('french')) ||
+                  getCoflixPreferredUrl(p).toLowerCase().includes('lecteur6')
+                ) || multiLinks[0];
+                const url = getCoflixPreferredUrl(preferred);
+                setSelectedSource('coflix');
+                setEmbedUrl(url);
+                setEmbedType('coflix');
+                currentSourceRef.current = 'coflix';
+              }
+            } else if (frembedAvailability) {
+              setSelectedSource('frembed');
+              setEmbedUrl(`https://frembed.bond/api/serie.php?id=${id}&sa=${seasonNumber}&epi=${episodeNumber}`);
+              setEmbedType('frembed');
+              currentSourceRef.current = 'frembed';
+            } else if (Array.isArray(customLinksResult.customLinks) && customLinksResult.customLinks.length > 0) {
+              setSelectedSource('custom');
+              setEmbedUrl(customLinksResult.customLinks[0]);
+              setEmbedType('custom');
+              currentSourceRef.current = 'custom';
+            }
+            // Note: Ne pas forcer vostfr automatiquement - laisser l'utilisateur choisir depuis le menu
+          }
+        }
+      }
+
+      // Get next episode info
+      try {
+        await fetchNextEpisodeData();
+      } catch (error) {
+        console.error('Error fetching next episode:', error);
+      }
+
+      setIsLoading(false);
+    } catch (error) {
+      console.error("Error loading source data:", error);
+      setLoadingExtractions(false);
+      setIsLoading(false);
+    }
+  }, [id, seasonNumber, episodeNumber, fetchSeasons, fetchNextEpisodeData]);
+
+  // Initial Fetch Effect
+  useEffect(() => {
+    // Validate parameters
+    if (!id || isNaN(seasonNumber) || isNaN(episodeNumber) || seasonNumber < 0 || episodeNumber < 1) {
+      console.error("Invalid ID, season, or episode number in URL");
+      setLoadingError(true);
+      setIsLoading(false);
+      return;
+    }
+
+    const initialFetch = async () => {
+      setIsLoading(true);
+      setLoadingError(false); // Reset error on new fetch
+
+      try {
+        // Fetch show information and episode details
+        const [showResponse, episodeResponse] = await Promise.all([
+          axios.get(`https://api.themoviedb.org/3/tv/${id}`, {
+            params: { api_key: TMDB_API_KEY, language: getTmdbLanguage() }
+          }),
+          axios.get(`https://api.themoviedb.org/3/tv/${id}/season/${seasonNumber}/episode/${episodeNumber}`, {
+            params: { api_key: TMDB_API_KEY, language: getTmdbLanguage() }
+          })
+        ]);
+
+        // Set show info
+        const show = showResponse.data;
+        setShowTitle(show.name);
+        setReleaseYear(new Date(show.first_air_date).getFullYear());
+        setBackdropPath(show.backdrop_path);
+        setShowPosterPath(show.poster_path);
+
+        // Set episode info
+        const episode = episodeResponse.data;
+        setEpisodeTitle(episode.name);
+        setEpisodeStillPath(episode.still_path);
+        setCurrentEpisodeInfo({
+          id: episode.id,
+          name: episode.name,
+          episode_number: episode.episode_number,
+          still_path: episode.still_path,
+          overview: episode.overview,
+          air_date: episode.air_date,
+          vote_average: episode.vote_average
+        });
+
+        // Add TV show episode to continueWatching (if history is enabled)
+        if (localStorage.getItem('settings_disable_history') !== 'true') {
+          const continueWatching = JSON.parse(localStorage.getItem('continueWatching') || '{"movies": [], "tv": []}');
+
+          // Ensure structure exists
+          if (!continueWatching.movies) continueWatching.movies = [];
+          if (!continueWatching.tv) continueWatching.tv = [];
+
+          // Find existing TV show entry or create new one
+          const showIdInt = parseInt(id!);
+          const existingShow = continueWatching.tv.find((tvShow: any) => tvShow.id === showIdInt);
+
+          if (existingShow) {
+            // Update existing show with current episode and timestamp
+            existingShow.currentEpisode = {
+              season: seasonNumber,
+              episode: episodeNumber
+            };
+            existingShow.lastAccessed = new Date().toISOString();
+            // Move to front of array
+            continueWatching.tv = continueWatching.tv.filter((tvShow: any) => tvShow.id !== showIdInt);
+            continueWatching.tv.unshift(existingShow);
+          } else {
+            // Create new TV show entry
+            const newTvEntry = {
+              id: showIdInt,
+              currentEpisode: {
+                season: seasonNumber,
+                episode: episodeNumber
+              },
+              lastAccessed: new Date().toISOString()
+            };
+            continueWatching.tv.unshift(newTvEntry);
+          }
+
+          // Keep only last 20 TV shows
+          // continueWatching.tv = continueWatching.tv.slice(0, 20); // Removed limit
+          localStorage.setItem('continueWatching', JSON.stringify(continueWatching));
+        }
+
+        // Get seasons information for episode navigation
+        await fetchSeasons();
+
+        // Resume playback functionality removed
+
+        // Initialize loading states
+        setLoadingDarkino(true);
+        setLoadingCoflix(true);
+        setLoadingOmega(true);
+        setLoadingCustom(true);
+        setLoadingSibnet(false);
+        setLoadingFrembed(true);
+        setLoadingFstream(true);
+        setLoadingExtractions(true);
+        // Reset MP4 sources specifically before fetching new ones
+        setMp4Sources([]); // Add this line
+        setFstreamData(null);
+        setFstreamSources([]);
+
+        // ========== EXÉCUTION PARALLÈLE DE TOUTES LES REQUÊTES API ==========
+        const releaseYearData = new Date(show.first_air_date).getFullYear();
+
+        // ========== INITIATE ALL ASYNCHRONOUS SOURCE CHECKS (NON-BLOCKING) ==========
+        const darkinoPromise = checkDarkinoAvailability(
+          show.name,
+          releaseYearData,
+          seasonNumber,
+          episodeNumber,
+          id!,
+          updateVipRetryMessage
+        ).catch(error => {
+          console.error('Error checking Darkino availability:', error);
+          return { available: false, sources: [] as any[], darkinoId: null };
+        });
+
+        const customLinksPromise = (async () => {
+          try {
+            // Fetch the full result including mp4Links
+            return await checkCustomTVLink(id!, seasonNumber, episodeNumber);
+          } catch (error) {
+            console.error('Error checking custom TV links:', error);
+            // Return default structure on error
+            return { isAvailable: false, customLinks: [] as string[], mp4Links: [] as { url: string; label?: string; language?: string; isVip?: boolean }[] };
+          } finally {
+            setLoadingCustom(false);
+          }
+        })();
+
+        const frembedAvailabilityPromise = (async () => {
+          try {
+            return await checkFrembedAvailability(id!, seasonNumber, episodeNumber);
+          } catch (error) {
+            console.error('Error checking Frembed availability:', error);
+            return false;
+          } finally {
+            setLoadingFrembed(false);
+          }
+        })();
+
+        const coflixPromise = (async () => {
+          try {
+            const coflixResponse = await axios.get(`${MAIN_API}/api/tmdb/tv/${id}`, {
+              params: { season: seasonNumber, episode: episodeNumber }
+            });
+            return coflixResponse.data;
+          } catch (error) {
+            console.error('Error fetching Coflix TV sources:', error);
+            return null;
+          } finally {
+            setLoadingCoflix(false);
+          }
+        })();
+
+        const omegaPromise = (async () => {
+          let omegaDataResult = null;
+          try {
+            // Get IMDB ID for the show
+            const imdbResponse = await axios.get(`https://api.themoviedb.org/3/tv/${id}/external_ids`, {
+              params: { api_key: TMDB_API_KEY },
+            });
+
+            if (imdbResponse.data && imdbResponse.data.imdb_id) {
+              const imdbId = imdbResponse.data.imdb_id;
+              // Appel sans params inutiles
+              const omegaResponse = await axios.get(`${MAIN_API}/api/imdb/tv/${imdbId}`);
+              omegaDataResult = omegaResponse.data;
+            }
+          } catch (error) {
+            console.error('Error fetching Omega TV sources:', error);
+            omegaDataResult = null;
+          } finally {
+            setLoadingOmega(false);
+          }
+          return omegaDataResult;
+        })();
+
+        // ========== CHECK PURSTREAM (BRAVO) SOURCE ==========
+        const purstreamPromise = (async () => {
+          try {
+            const purstreamResponse = await axios.get(`${MAIN_API}/api/purstream/tv/${id}/stream`, {
+              params: { season: seasonNumber, episode: episodeNumber },
+              headers: { ...getVipHeaders() }
+            });
+            return purstreamResponse.data;
+          } catch (error) {
+            console.error('Error fetching PurStream TV sources:', error);
+            return null;
+          }
+        })();
+
+        // ========== CHECK FSTREAM SOURCE ==========
+        const fstreamPromise = (async () => {
+          try {
+            // Envoyer la clé VIP via header pour vérification côté serveur
+            const fstreamResponse = await axios.get(`${MAIN_API}/api/fstream/tv/${id}/season/${seasonNumber}`, {
+              headers: { ...getVipHeaders() }
+            });
+            return fstreamResponse.data;
+          } catch (error) {
+            console.error('Error fetching FStream TV sources:', error);
+            return null;
+          } finally {
+            setLoadingFstream(false);
+          }
+        })();
+
+        // ========== CHECK WIFLIX (LYNX) SOURCE ==========
+        const wiflixPromise = (async () => {
+          try {
+            const wiflixResponse = await axios.get(`${MAIN_API}/api/wiflix/tv/${id}/${seasonNumber}`);
+            return wiflixResponse.data;
+          } catch (error) {
+            console.error('Error fetching Wiflix/Lynx TV source:', error);
+            return null;
+          } finally {
+            setLoadingWiflix(false);
+          }
+        })();
+
+        // ========== CHECK VIPER SOURCE ==========
+        const viperPromise = (async () => {
+          try {
+            const viperResponse = await axios.get(`${MAIN_API}/api/cpasmal/tv/${id}/${seasonNumber}/${episodeNumber}`);
+            return viperResponse.data;
+          } catch (error) {
+            console.error('Error fetching Viper TV source:', error);
+            return null;
+          } finally {
+            setLoadingViper(false);
+          }
+        })();
+
+        // ========== CHECK VOX SOURCE ==========
+        const voxPromise = (async () => {
+          try {
+            return await checkVoxAvailability(id!, seasonNumber, episodeNumber);
+          } catch (error) {
+            console.error('Error fetching Vox TV source:', error);
+            return null;
+          } finally {
+            setLoadingVox(false);
+          }
+        })();
+
+        // ========== AWAIT ALL SOURCE CHECKS TO COMPLETE ==========
+        const [
+          darkinoResult,
+          customLinksResult,
+          frembedAvailabilityResult,
+          coflixResult,
+          rawOmegaData,
+          purstreamResult,
+          fstreamResult,
+          wiflixResult,
+          viperResult,
+          voxResult
+        ] = await Promise.all([
+          darkinoPromise,
+          customLinksPromise,
+          frembedAvailabilityPromise,
+          coflixPromise,
+          omegaPromise,
+          purstreamPromise,
+          fstreamPromise,
+          wiflixPromise,
+          viperPromise,
+          voxPromise
+        ]);
+
+        // ========== PROCESS OMEGA RESULTS (before setting state) ==========
+        let processedOmegaDataForState = null; // Variable to hold the data for setOmegaData
+        let isOmegaAvailable = false; // Local var for decision making
+        let supervideoM3u8: string | null = null;
+        let droploadM3u8: string | null = null;
+        if (rawOmegaData) {
+          isOmegaAvailable = checkOmegaAvailability(rawOmegaData, seasonNumber, episodeNumber);
+          if (isOmegaAvailable) {
+            processedOmegaDataForState = rawOmegaData;
+            // Ajout: si supervideo ou dropload, tenter d'extraire le m3u8
+            const omegaPlayers = extractOmegaPlayers(rawOmegaData, seasonNumber, episodeNumber);
+            const supervideo = omegaPlayers.find((p: any) => p.player && p.player.toLowerCase().includes('supervideo'));
+            if (supervideo) {
+              const supervideoResult = await extractM3u8FromEmbed(supervideo, MAIN_API);
+              if (supervideoResult?.success && supervideoResult.hlsUrl) {
+                supervideoM3u8 = supervideoResult.hlsUrl;
+              }
+            }
+            const dropload = omegaPlayers.find((p: any) => p.player && p.player.toLowerCase().includes('dropload'));
+            if (dropload) {
+              const droploadResult = await extractM3u8FromEmbed(dropload, MAIN_API);
+              if (droploadResult?.success && droploadResult.m3u8Url) {
+                droploadM3u8 = droploadResult.m3u8Url;
+              }
+            }
+          } else {
+            console.log(`Omega source not available for S${seasonNumber}E${episodeNumber}`);
+          }
+        }
+        setOmegaData(processedOmegaDataForState); // Update state with processed Omega data
+
+        // ========== TRAITEMENT DES RÉSULTATS DE DARKINO ==========
+        if (darkinoResult && darkinoResult.available && darkinoResult.sources.length > 0) {
+          setDarkinoAvailable(true);
+          setDarkinoSources(darkinoResult.sources);
+          setDarkinoShowId(darkinoResult.darkinoId || null);
+        } else {
+          setDarkinoAvailable(false);
+          setDarkinoSources([]);
+          setDarkinoShowId(null);
+        }
+        setLoadingDarkino(false);
+
+        // ========== TRAITEMENT DES RÉSULTATS DES LIENS CUSTOMS ==========
+        setCustomSources(customLinksResult.customLinks || []);
+
+        let fetchedMp4Sources: { url: string; label?: string; language?: string; isVip?: boolean }[] = customLinksResult.mp4Links || [];
+        setMp4Sources(fetchedMp4Sources);
+
+        // ========== TRAITEMENT DES RÉSULTATS DE FREMBED ==========
+        setFrembedAvailable(frembedAvailabilityResult);
+
+        // ========== TRAITEMENT DES RÉSULTATS COFLIX ==========
+        if (coflixResult) {
+          console.log('Coflix data received:', coflixResult);
+          if (coflixResult?.current_episode &&
+            (coflixResult?.current_episode?.iframe_src ||
+              (coflixResult?.current_episode?.player_links && coflixResult?.current_episode?.player_links.length > 0))) {
+            setCoflixData(coflixResult.current_episode);
+          } else if (coflixResult?.iframe_src || (coflixResult?.player_links && coflixResult?.player_links.length > 0)) {
+            setCoflixData(coflixResult);
+          }
+        }
+
+        // ========== INITIALISATION DES CONTAINERS POUR SOURCES EXTRAITES ==========
+        let finalHlsSources: { url: string; label: string }[] = [];
+        let finalFileSources: { url: string; label: string }[] = [];
+
+        // ========== PURSTREAM (BRAVO) SOURCES ==========
+        if (purstreamResult && purstreamResult.sources && purstreamResult.sources.length > 0) {
+          console.log('🎬 Processing PurStream (Bravo) result:', purstreamResult.sources.length, 'sources');
+          const bravoSources = purstreamResult.sources
+            .filter((s: { url: string; name: string; format: string }) => s.url)
+            .map((s: { url: string; name: string; format: string }) => ({
+              url: s.url,
+              label: (s.name || 'HLS').replace(/^pur\s*\|\s*/i, '').replace(/\s*\|\s*/g, ' - '),
+            }));
+          setPurstreamSources(bravoSources);
+          console.log(`✅ PurStream (Bravo) sources set: ${bravoSources.length}`);
+        }
+
+        // Process Firebase darkibox links for m3u8 extraction (HIGH PRIORITY)
+        if (customLinksResult.customLinks && customLinksResult.customLinks.length > 0) {
+          console.log('🔍 Processing Firebase custom links for darkibox extraction...');
+          const darkiboxLinks = customLinksResult.customLinks.filter(url => url.toLowerCase().includes('darkibox'));
+
+          // Paralléliser les extractions darkibox
+          if (darkiboxLinks.length > 0) {
+            const darkiboxPromises = darkiboxLinks.map(async (darkiboxUrl) => {
+              console.log('🎬 Processing Firebase darkibox link:', darkiboxUrl);
+              try {
+                const darkiboxResult = await extractDarkiboxSources(darkiboxUrl, MAIN_API);
+                if (darkiboxResult?.success && darkiboxResult.hlsUrl) {
+                  return { url: darkiboxResult.hlsUrl, label: 'Darkibox' };
+                }
+              } catch (error) {
+                console.error('❌ Error extracting m3u8 from Firebase darkibox link:', error);
+              }
+              return null;
+            });
+
+            const darkiboxResults = await Promise.all(darkiboxPromises);
+            const validDarkiboxResults = darkiboxResults.filter(result => result !== null);
+            finalHlsSources = [...finalHlsSources, ...validDarkiboxResults];
+            console.log(`✅ Added ${validDarkiboxResults.length} Firebase Darkibox HLS sources`);
+          }
+        }
+
+        // Add supervideo and dropload HLS sources if available (LOWER PRIORITY)
+        if (rawOmegaData) {
+          console.log('🔍 Processing Omega result for supervideo/dropload extraction...');
+          const omegaPlayers = extractOmegaPlayers(rawOmegaData, seasonNumber, episodeNumber);
+
+          // Paralléliser les extractions Omega
+          const omegaExtractionPromises = [];
+
+          const supervideo = omegaPlayers.find((p: any) => p.player && p.player.toLowerCase().includes('supervideo'));
+          if (supervideo) {
+            console.log('🎬 Found supervideo player:', supervideo);
+            omegaExtractionPromises.push(
+              extractM3u8FromEmbed(supervideo, MAIN_API).then(result => ({
+                type: 'supervideo',
+                result,
+                label: 'Supervideo HLS 720p'
+              }))
+            );
+          }
+
+          const dropload = omegaPlayers.find((p: any) => p.player && p.player.toLowerCase().includes('dropload'));
+          if (dropload) {
+            console.log('🎬 Found dropload player:', dropload);
+            omegaExtractionPromises.push(
+              extractM3u8FromEmbed(dropload, MAIN_API).then(result => ({
+                type: 'dropload',
+                result,
+                label: 'Dropload HLS 720p'
+              }))
+            );
+          }
+
+          if (omegaExtractionPromises.length > 0) {
+            const omegaResults = await Promise.all(omegaExtractionPromises);
+            omegaResults.forEach(({ type, result, label }) => {
+              if (type === 'supervideo' && result?.success && result.hlsUrl) {
+                finalHlsSources = [...finalHlsSources, { url: result.hlsUrl, label }];
+                console.log(`✅ Added ${label} source:`, result.hlsUrl);
+              } else if (type === 'dropload' && result?.success && result.m3u8Url) {
+                finalHlsSources = [...finalHlsSources, { url: result.m3u8Url, label }];
+                console.log(`✅ Added ${label} source:`, result.m3u8Url);
+              }
+            });
+          }
+        }
+
+        // Process Firebase dropload links for m3u8 extraction
+        if (customLinksResult.customLinks && customLinksResult.customLinks.length > 0) {
+          console.log('🔍 Processing Firebase custom links for dropload extraction...');
+          const droploadLinks = customLinksResult.customLinks.filter(url => url.toLowerCase().includes('dropload'));
+
+          // Paralléliser les extractions dropload Firebase
+          if (droploadLinks.length > 0) {
+            const droploadPromises = droploadLinks.map(async (droploadUrl) => {
+              console.log('🎬 Processing Firebase dropload link:', droploadUrl);
+              try {
+                const droploadResult = await extractM3u8FromEmbed({
+                  player: 'dropload',
+                  link: droploadUrl
+                }, MAIN_API);
+                console.log('📡 Firebase Dropload extraction result:', droploadResult);
+                if (droploadResult?.success && droploadResult.m3u8Url) {
+                  return { url: droploadResult.m3u8Url, label: 'Dropload HLS 720p' };
+                }
+              } catch (error) {
+                console.error('❌ Error extracting m3u8 from Firebase dropload link:', error);
+              }
+              return null;
+            });
+
+            const droploadResults = await Promise.all(droploadPromises);
+            const validDroploadResults = droploadResults.filter(result => result !== null);
+            finalHlsSources = [...finalHlsSources, ...validDroploadResults];
+            console.log(`✅ Added ${validDroploadResults.length} Firebase Dropload HLS sources`);
+          }
+        }
+
+        // Process Firebase custom links for VOE.SX and UQLOAD extraction
+        if (customLinksResult.customLinks && customLinksResult.customLinks.length > 0) {
+          // VOE.SX (HLS)
+          try {
+            const voeLinks = customLinksResult.customLinks.filter((url: string) => typeof url === 'string' && (url.toLowerCase().includes('voe.') || url.toLowerCase().includes('jilliandescribecompany')));
+
+            // Paralléliser les extractions VOE
+            if (voeLinks.length > 0) {
+              const voePromises = voeLinks.map(async (voeUrl) => {
+                try {
+                  const voeResult = await extractVoeM3u8(voeUrl);
+                  if (voeResult?.success && voeResult.hlsUrl) {
+                    return { url: voeResult.hlsUrl, label: 'Voe HLS 720p' };
+                  }
+                } catch (e) {
+                  console.error('❌ Error extracting VOE m3u8 from Firebase link (TV):', e);
+                }
+                return null;
+              });
+
+              const voeResults = await Promise.all(voePromises);
+              const validVoeResults = voeResults.filter(result => result !== null);
+              finalHlsSources = [...finalHlsSources, ...validVoeResults];
+              console.log(`✅ Added ${validVoeResults.length} VOE HLS sources from Firebase`);
+            }
+          } catch { }
+
+          // UQLOAD (File MP4)
+          try {
+            const uqLinks = customLinksResult.customLinks.filter((url: string) => typeof url === 'string' && url.toLowerCase().includes('uqload'));
+
+            // Paralléliser les extractions UQLOAD
+            if (uqLinks.length > 0) {
+              const uqPromises = uqLinks.map(async (uqUrl) => {
+                try {
+                  const uqResult = await extractUqloadFile(normalizeUqloadEmbedUrl(uqUrl), MAIN_API);
+                  if (uqResult?.success && uqResult.m3u8Url) {
+                    return { url: uqResult.m3u8Url, label: 'Uqload 360p' };
+                  }
+                } catch (e) {
+                  console.error('❌ Error extracting UQLOAD from Firebase link (TV):', e);
+                }
+                return null;
+              });
+
+              const uqResults = await Promise.all(uqPromises);
+              const validUqResults = uqResults.filter(result => result !== null);
+              finalFileSources = [...finalFileSources, ...validUqResults];
+              console.log(`✅ Added ${validUqResults.length} UQLOAD file sources from Firebase`);
+            }
+          } catch { }
+
+          // DOODSTREAM from Firebase custom links
+          try {
+            const doodLinks = customLinksResult.customLinks.filter((url: string) => typeof url === 'string' && isDoodStreamEmbed(url));
+            if (doodLinks.length > 0) {
+              console.log(`[DOODSTREAM/FIREBASE][TV] Found ${doodLinks.length} DoodStream links from Firebase`);
+              const doodPromises = doodLinks.map(async (doodUrl: string) => {
+                try {
+                  const doodResult = await extractDoodStreamFile(doodUrl);
+                  if (doodResult?.success && doodResult.m3u8Url) {
+                    return { url: doodResult.m3u8Url, label: 'DoodStream' };
+                  }
+                } catch (e) {
+                  console.error(' Error extracting DoodStream from Firebase link (TV):', e);
+                }
+                return null;
+              });
+              const doodResults = await Promise.all(doodPromises);
+              const validDoodResults = doodResults.filter(result => result !== null);
+              finalFileSources = [...finalFileSources, ...validDoodResults];
+              console.log(` Added ${validDoodResults.length} DoodStream sources from Firebase`);
+            }
+          } catch { }
+
+          // SEEKSTREAMING from Firebase custom links
+          try {
+            const seekLinks = customLinksResult.customLinks.filter((url: string) => typeof url === 'string' && isSeekStreamingEmbed(url));
+            if (seekLinks.length > 0) {
+              console.log(`[SEEKSTREAMING/FIREBASE][TV] Found ${seekLinks.length} SeekStreaming links from Firebase`);
+              const seekPromises = seekLinks.map(async (seekUrl: string) => {
+                try {
+                  const seekResult = await extractSeekStreamingM3u8(seekUrl);
+                  if (seekResult?.success && seekResult.hlsUrl) {
+                    return { url: seekResult.hlsUrl, label: 'SeekStreaming HLS' };
+                  }
+                } catch (e) {
+                  console.error(' Error extracting SeekStreaming from Firebase link (TV):', e);
+                }
+                return null;
+              });
+              const seekResults = await Promise.all(seekPromises);
+              const validSeekResults = seekResults.filter(result => result !== null);
+              finalHlsSources = [...finalHlsSources, ...validSeekResults];
+              console.log(` Added ${validSeekResults.length} SeekStreaming HLS sources from Firebase`);
+            }
+          } catch { }
+        }
+
+        // Process Coflix MULTI links for VOE.SX and UQLOAD extraction (ignore Omega)
+        if (coflixResult) {
+          const multiLinks = (coflixResult.current_episode && coflixResult.current_episode.player_links)
+            ? coflixResult.current_episode.player_links
+            : (coflixResult.player_links || []);
+
+          const decodedLinks = multiLinks
+            .map((p: any) => getCoflixPreferredUrl(p))
+            .filter((u: string) => !!u);
+
+          console.log('[VOE/UQLOAD][TV] Multi decoded links:', decodedLinks);
+
+          // VOE.SX from MULTI (HLS) - Paralléliser
+          const voeMulti = decodedLinks.filter((u: string) => u.toLowerCase().includes('voe.'));
+          console.log(`[VOE/UQLOAD][TV] Found ${voeMulti.length} VOE links from MULTI`, voeMulti);
+
+          if (voeMulti.length > 0) {
+            const voeMultiPromises = voeMulti.map(async (vUrl: string) => {
+              try {
+                console.log('[VOE/UQLOAD][TV] Extracting VOE m3u8 from MULTI link:', vUrl);
+                const voeResult = await extractVoeM3u8(vUrl);
+                if (voeResult?.success && voeResult.hlsUrl) {
+                  return { url: voeResult.hlsUrl, label: 'Voe HLS 720p' };
+                }
+              } catch (e) {
+                console.error('❌ Error extracting VOE m3u8 from MULTI link (TV):', e);
+              }
+              return null;
+            });
+
+            const voeMultiResults = await Promise.all(voeMultiPromises);
+            const validVoeMultiResults = voeMultiResults.filter(result => result !== null);
+            finalHlsSources = [...finalHlsSources, ...validVoeMultiResults];
+            console.log(`[VOE/UQLOAD][TV] Added ${validVoeMultiResults.length} VOE HLS sources from MULTI`);
+          }
+
+          // UQLOAD from MULTI (File) - Paralléliser
+          const uqMulti = decodedLinks.filter((u: string) => u.toLowerCase().includes('uqload'));
+          console.log(`[VOE/UQLOAD][TV] Found ${uqMulti.length} UQLOAD links from MULTI`, uqMulti);
+
+          if (uqMulti.length > 0) {
+            const uqMultiPromises = uqMulti.map(async (uUrl: string) => {
+              try {
+                console.log('[VOE/UQLOAD][TV] Extracting UQLOAD file from MULTI link:', uUrl);
+                const uqResult = await extractUqloadFile(normalizeUqloadEmbedUrl(uUrl), MAIN_API);
+                if (uqResult?.success && uqResult.m3u8Url) {
+                  return { url: uqResult.m3u8Url, label: 'Uqload 360p' };
+                }
+              } catch (e) {
+                console.error('❌ Error extracting UQLOAD from MULTI link (TV):', e);
+              }
+              return null;
+            });
+
+            const uqMultiResults = await Promise.all(uqMultiPromises);
+            const validUqMultiResults = uqMultiResults.filter(result => result !== null);
+            finalFileSources = [...finalFileSources, ...validUqMultiResults];
+            console.log(`[VOE/UQLOAD][TV] Added ${validUqMultiResults.length} UQLOAD file sources from MULTI`);
+          }
+
+          // DOODSTREAM from Coflix MULTI
+          const doodMulti = decodedLinks.filter((u: string) => isDoodStreamEmbed(u));
+          if (doodMulti.length > 0) {
+            console.log(`[DOODSTREAM/COFLIX][TV] Found ${doodMulti.length} DoodStream links from MULTI`);
+            const doodMultiPromises = doodMulti.map(async (dUrl: string) => {
+              try {
+                const doodResult = await extractDoodStreamFile(dUrl);
+                if (doodResult?.success && doodResult.m3u8Url) {
+                  return { url: doodResult.m3u8Url, label: 'DoodStream' };
+                }
+              } catch (e) {
+                console.error('❌ Error extracting DoodStream from MULTI link (TV):', e);
+              }
+              return null;
+            });
+            const doodMultiResults = await Promise.all(doodMultiPromises);
+            const validDoodMultiResults = doodMultiResults.filter(result => result !== null);
+            finalFileSources = [...finalFileSources, ...validDoodMultiResults];
+            console.log(`✅ Added ${validDoodMultiResults.length} DoodStream sources from MULTI`);
+          }
+
+          // SEEKSTREAMING from Coflix MULTI
+          const seekMulti = decodedLinks.filter((u: string) => isSeekStreamingEmbed(u));
+          if (seekMulti.length > 0) {
+            console.log(`[SEEKSTREAMING/COFLIX][TV] Found ${seekMulti.length} SeekStreaming links from MULTI`);
+            const seekMultiPromises = seekMulti.map(async (sUrl: string) => {
+              try {
+                const seekResult = await extractSeekStreamingM3u8(sUrl);
+                if (seekResult?.success && seekResult.hlsUrl) {
+                  return { url: seekResult.hlsUrl, label: 'SeekStreaming HLS' };
+                }
+              } catch (e) {
+                console.error('❌ Error extracting SeekStreaming from MULTI link (TV):', e);
+              }
+              return null;
+            });
+            const seekMultiResults = await Promise.all(seekMultiPromises);
+            const validSeekMultiResults = seekMultiResults.filter(result => result !== null);
+            finalHlsSources = [...finalHlsSources, ...validSeekMultiResults];
+            console.log(`✅ Added ${validSeekMultiResults.length} SeekStreaming HLS sources from MULTI`);
+          }
+        }
+
+
+        console.log('🎯 Final HLS sources after supervideo/dropload processing:', finalHlsSources);
+
+        // ========== TRAITEMENT DES RÉSULTATS FSTREAM ==========
+        let fstreamProcessedSources: { url: string; label: string; category: string }[] = [];
+        const fstreamHlsSources: { url: string; label: string; category: string }[] = [];
+        const fsvidSources: { url: string; label: string; category: string }[] = [];
+
+        // Check if user is VIP (déclaré au niveau de la fonction pour être accessible partout)
+        const isVip = localStorage.getItem('is_vip') === 'true';
+
+        if (fstreamResult && fstreamResult.success && fstreamResult.episodes) {
+
+          // Get the specific episode data
+          const episodeData = fstreamResult.episodes[episodeNumber.toString()];
+          if (episodeData && episodeData.languages) {
+            // Process all FStream language categories with priority to fsvid sources
+            const categories = ['VF', 'VOSTFR', 'VOENG', 'Default'];
+            const otherSources: { url: string; label: string; category: string }[] = [];
+
+            categories.forEach(category => {
+              const categoryPlayers = episodeData.languages[category] || [];
+              const fsvidPlayers = categoryPlayers.filter((player: any) =>
+                player.url && player.url.toLowerCase().includes('fsvid')
+              );
+
+              // Pour chaque catégorie, ne garder qu'une seule source fsvid (priorité à PREMIUM puis FSvid)
+              if (fsvidPlayers.length > 0) {
+                const premiumPlayer = fsvidPlayers.find((player: any) =>
+                  player.player === 'PREMIUM'
+                );
+                const selectedFsvidPlayer = premiumPlayer || fsvidPlayers[0];
+
+                const source = {
+                  url: selectedFsvidPlayer.url,
+                  label: `${category} - ${selectedFsvidPlayer.player} ${selectedFsvidPlayer.quality}`,
+                  category: category
+                };
+
+                fsvidSources.push(source);
+              }
+
+              // Traiter les autres sources (non-fsvid)
+              const otherPlayers = categoryPlayers.filter((player: any) =>
+                !player.url || !player.url.toLowerCase().includes('fsvid')
+              );
+
+              otherPlayers.forEach((player: any) => {
+                const source = {
+                  url: player.url,
+                  label: `${category} - ${player.player} ${player.quality}`,
+                  category: category
+                };
+                otherSources.push(source);
+              });
+            });
+
+            // Pour l'affichage dans le menu : utiliser seulement les sources non-fsvid
+            // Pour l'extraction M3U8 : utiliser toutes les sources (fsvid + autres) si VIP
+            fstreamProcessedSources = [...otherSources];
+          }
+
+          console.log('✅ FStream TV sources processed:', fstreamProcessedSources.length);
+          console.log('🎯 FStream fsvid sources found:', fsvidSources.length);
+
+          // =========== EXTRACTION M3U8 DES SOURCES FSTREAM ===========
+          console.log('🔍 Extracting M3U8 from FStream TV sources...');
+
+          // Paralléliser les extractions M3U8 pour vidzy, fsvid et uqload
+          const fstreamExtractionPromises: Promise<{ type: string; result: M3u8Result | null; originalSource: { url: string; label: string; category: string } }>[] = [];
+
+          // Extraire M3U8 des sources vidzy
+          const vidzySources = fstreamProcessedSources.filter(source =>
+            source.url.toLowerCase().includes('vidzy')
+          );
+
+          if (vidzySources.length > 0) {
+            console.log(`🎬 Found ${vidzySources.length} vidzy sources, extracting M3U8...`);
+            vidzySources.forEach(vidzySource => {
+              fstreamExtractionPromises.push(
+                extractVidzyM3u8(vidzySource.url, MAIN_API).then(result => ({
+                  type: 'vidzy',
+                  result,
+                  originalSource: vidzySource
+                }))
+              );
+            });
+          }
+
+          // Extraire M3U8 des sources fsvid
+          if (fsvidSources.length > 0) {
+            console.log(`🎬 Found ${fsvidSources.length} fsvid sources, extracting M3U8...`);
+            fsvidSources.forEach(fsvidSource => {
+              fstreamExtractionPromises.push(
+                extractFsvidM3u8(fsvidSource.url, MAIN_API).then(result => ({
+                  type: 'fsvid',
+                  result,
+                  originalSource: fsvidSource
+                }))
+              );
+            });
+          }
+
+          // Extraire M3U8 des sources uqload
+          const uqloadSources = fstreamProcessedSources.filter(source =>
+            source.url.toLowerCase().includes('uqload')
+          );
+
+          if (uqloadSources.length > 0) {
+            console.log(`🎬 Found ${uqloadSources.length} uqload sources, extracting M3U8...`);
+            uqloadSources.forEach(uqloadSource => {
+              fstreamExtractionPromises.push(
+                extractUqloadFile(normalizeUqloadEmbedUrl(uqloadSource.url), MAIN_API).then(result => ({
+                  type: 'uqload',
+                  result,
+                  originalSource: uqloadSource
+                }))
+              );
+            });
+          }
+
+          if (fstreamExtractionPromises.length > 0) {
+            const fstreamExtractionResults = await Promise.all(fstreamExtractionPromises);
+
+            // Séparer les sources fsvid, vidzy et uqload pour les ordonner correctement
+            const fsvidHlsSources: { url: string; label: string; category: string }[] = [];
+            const vidzyHlsSources: { url: string; label: string; category: string }[] = [];
+            const uqloadHlsSources: { url: string; label: string; category: string }[] = [];
+
+            fstreamExtractionResults.forEach(({ type, result, originalSource }) => {
+              if (type === 'fsvid' && result?.success && result.m3u8Url) {
+                // Vérifier si une source fsvid pour cette catégorie existe déjà
+                const existingFsvid = fsvidHlsSources.find(s => s.category === originalSource.category);
+                if (!existingFsvid) {
+                  fsvidHlsSources.push({
+                    url: result.m3u8Url,
+                    label: `${originalSource.category} - Fsvid HLS`,
+                    category: originalSource.category
+                  });
+                  console.log(`✅ Added Fsvid HLS source: ${result.m3u8Url}`);
+                } else {
+                  console.log(`⚠️ Skipping duplicate Fsvid HLS source for category ${originalSource.category}`);
+                }
+              } else if (type === 'vidzy' && result?.success && result.m3u8Url) {
+                vidzyHlsSources.push({
+                  url: result.m3u8Url,
+                  label: `${originalSource.category} - Vidzy HLS`,
+                  category: originalSource.category
+                });
+                console.log(`✅ Added Vidzy HLS source: ${result.m3u8Url}`);
+              } else if (type === 'uqload' && result?.success && result.m3u8Url) {
+                uqloadHlsSources.push({
+                  url: result.m3u8Url,
+                  label: `${originalSource.category} - UQLOAD HLS`,
+                  category: originalSource.category
+                });
+                console.log(`✅ Added UQLOAD HLS source: ${result.m3u8Url}`);
+              }
+            });
+
+            // Ajouter fsvid en premier, puis vidzy, puis uqload
+            fstreamHlsSources.push(...fsvidHlsSources, ...vidzyHlsSources, ...uqloadHlsSources);
+          }
+
+          console.log(`🎯 FStream TV HLS sources extracted: ${fstreamHlsSources.length}`);
+        } else {
+          setFstreamData(null);
+          console.log('❌ No FStream TV sources available');
+        }
+
+        setFstreamSources(fstreamProcessedSources);
+
+        // =========== TRAITEMENT DES RÉSULTATS WIFLIX (LYNX) ===========
+        let wiflixProcessedSources: { url: string; label: string; category: string }[] = [];
+
+        if (wiflixResult && wiflixResult.success && wiflixResult.episodes) {
+          console.log('🎬 Processing Wiflix/Lynx TV result:', wiflixResult);
+          setWiflixData(wiflixResult);
+
+          // Get the specific episode data
+          const episodeData = wiflixResult.episodes[episodeNumber.toString()];
+          if (episodeData) {
+            // Process Wiflix categories with priority to VF sources
+            const categories = ['vf', 'vostfr'];
+            const vfSources: { url: string; label: string; category: string }[] = [];
+            const vostfrSources: { url: string; label: string; category: string }[] = [];
+
+            categories.forEach(category => {
+              const categoryPlayers = episodeData[category as keyof typeof episodeData] || [];
+              categoryPlayers.forEach((player: any) => {
+                const source = {
+                  url: player.url,
+                  label: `Lynx ${category.toUpperCase()} - ${player.name}`,
+                  category: category.toUpperCase()
+                };
+
+                if (category === 'vf') {
+                  vfSources.push(source);
+                } else {
+                  vostfrSources.push(source);
+                }
+              });
+            });
+
+            // Mettre les sources VF en premier
+            wiflixProcessedSources = [...vfSources, ...vostfrSources];
+
+            console.log('✅ Wiflix/Lynx TV sources processed:', wiflixProcessedSources.length);
+            console.log('🎯 Wiflix VF sources found:', vfSources.length);
+          }
+        } else {
+          setWiflixData(null);
+          console.log('❌ No Wiflix/Lynx TV sources available');
+        }
+
+        setWiflixSources(wiflixProcessedSources);
+        console.log('🎯 [WatchTv] Wiflix/Lynx TV sources set:', wiflixProcessedSources.length, wiflixProcessedSources);
+
+        // =========== EXTRACTION ONEUPLOAD DEPUIS WIFLIX ===========
+        if (wiflixProcessedSources.length > 0) {
+          console.log('🔍 Checking for OneUpload sources in Wiflix TV results...');
+
+          // Identifier les sources OneUpload
+          const oneUploadSources = wiflixProcessedSources.filter(source =>
+            isOneUploadEmbed(source.url)
+          );
+
+          if (oneUploadSources.length > 0) {
+            console.log(`🎬 Found ${oneUploadSources.length} OneUpload TV sources, extracting...`);
+
+            try {
+              const oneUploadExtractionPromises = oneUploadSources.map(async (source) => {
+                const result = await extractOneUploadSources(source.url);
+                return { result, originalSource: source };
+              });
+
+              const oneUploadResults = await Promise.all(oneUploadExtractionPromises);
+
+              oneUploadResults.forEach(({ result, originalSource }) => {
+                if (result?.success) {
+                  // Traiter les sources HLS (M3U8)
+                  if (result.hlsUrl) {
+                    finalHlsSources.push({
+                      url: result.hlsUrl,
+                      label: `Nexus ${originalSource.category} - OneUpload HLS`
+                    });
+                    console.log(`✅ Added OneUpload HLS TV source: ${result.hlsUrl}`);
+                  }
+                  // Traiter les sources MP4
+                  else if (result.m3u8Url) {
+                    // Vérifier si c'est un fichier MP4 ou M3U8
+                    if (result.m3u8Url.includes('.mp4')) {
+                      finalFileSources.push({
+                        url: result.m3u8Url,
+                        label: `Nexus ${originalSource.category} - OneUpload MP4`
+                      });
+                      console.log(`✅ Added OneUpload MP4 TV source: ${result.m3u8Url}`);
+                    } else {
+                      finalHlsSources.push({
+                        url: result.m3u8Url,
+                        label: `Nexus ${originalSource.category} - OneUpload HLS`
+                      });
+                      console.log(`✅ Added OneUpload HLS TV source: ${result.m3u8Url}`);
+                    }
+                  }
+                } else {
+                  console.log(`❌ Failed to extract OneUpload TV source: ${originalSource.url}`);
+                }
+              });
+
+              console.log(`🎯 OneUpload TV extraction completed. HLS: ${finalHlsSources.length}, MP4: ${finalFileSources.length}`);
+            } catch (error) {
+              console.error('❌ Error during OneUpload TV extraction:', error);
+            }
+          } else {
+            console.log('ℹ️ No OneUpload TV sources found in Wiflix results');
+          }
+        }
+
+        // =========== EXTRACTION VOE DEPUIS WIFLIX TV (DEUXIÈME SECTION) ===========
+        if (wiflixProcessedSources.length > 0) {
+          console.log('🔍 Checking for VOE sources in Wiflix TV results...');
+
+          // Identifier les sources VOE
+          const voeSources = wiflixProcessedSources.filter(source =>
+            source.url.toLowerCase().includes('voe.sx')
+          );
+
+          if (voeSources.length > 0) {
+            console.log(`🎬 Found ${voeSources.length} VOE TV sources, extracting...`);
+
+            try {
+              const voeExtractionPromises = voeSources.map(async (source) => {
+                console.log(`[VOE/WIFLIX][TV] Extracting VOE m3u8 from Wiflix link: ${source.url}`);
+                const voeResult = await extractVoeM3u8(source.url);
+                return { result: voeResult, originalSource: source };
+              });
+
+              const voeResults = await Promise.all(voeExtractionPromises);
+
+              // Traiter les résultats VOE et les ajouter aux sources HLS
+              const validVoeResults: { url: string; label: string }[] = [];
+              voeResults.forEach(({ result, originalSource }) => {
+                if (result?.success && result.hlsUrl) {
+                  validVoeResults.push({
+                    url: result.hlsUrl,
+                    label: `Voe HLS ${originalSource.category}`
+                  });
+                  console.log(`✅ Added VOE HLS TV source: ${result.hlsUrl}`);
+                } else {
+                  console.log(`❌ Failed to extract VOE TV source: ${originalSource.url}`);
+                }
+              });
+
+              if (validVoeResults.length > 0) {
+                // Prioriser les sources VF puis VOSTFR pour VOE
+                const voeVfSources = validVoeResults.filter(s => s.label.includes('VF'));
+                const voeVostfrSources = validVoeResults.filter(s => s.label.includes('VOSTFR'));
+                const prioritizedVoeSources = [...voeVfSources, ...voeVostfrSources];
+
+                finalHlsSources = [...prioritizedVoeSources, ...finalHlsSources];
+                console.log(`✅ VOE TV extraction completed. Added ${validVoeResults.length} VOE HLS sources to final sources`);
+              } else {
+                console.log('❌ No valid VOE TV sources extracted from Wiflix results');
+              }
+            } catch (error) {
+              console.error('❌ Error during VOE TV extraction:', error);
+            }
+          } else {
+            console.log('ℹ️ No VOE TV sources found in Wiflix results');
+          }
+        }
+
+        // =========== EXTRACTION UQLOAD DEPUIS WIFLIX TV (DEUXIÈME SECTION) ===========
+        if (wiflixProcessedSources.length > 0) {
+          console.log('🔍 Checking for UQLOAD sources in Wiflix TV results...');
+
+          // Identifier les sources UQLOAD
+          const uqloadSources = wiflixProcessedSources.filter(source =>
+            source.url.toLowerCase().includes('uqload')
+          );
+
+          if (uqloadSources.length > 0) {
+            console.log(`🎬 Found ${uqloadSources.length} UQLOAD TV sources, extracting...`);
+
+            try {
+              const uqloadExtractionPromises = uqloadSources.map(async (source) => {
+                console.log(`[UQLOAD/WIFLIX][TV] Extracting UQLOAD file from Wiflix link: ${source.url}`);
+                const uqloadResult = await extractUqloadFile(normalizeUqloadEmbedUrl(source.url), MAIN_API);
+                return { result: uqloadResult, originalSource: source };
+              });
+
+              const uqloadResults = await Promise.all(uqloadExtractionPromises);
+
+              // Traiter les résultats UQLOAD et les ajouter aux sources File
+              const validUqloadResults: { url: string; label: string }[] = [];
+              uqloadResults.forEach(({ result, originalSource }) => {
+                if (result?.success && result.m3u8Url) {
+                  validUqloadResults.push({
+                    url: result.m3u8Url,
+                    label: `Uqload ${originalSource.category}`
+                  });
+                  console.log(`✅ Added UQLOAD file TV source: ${result.m3u8Url}`);
+                } else {
+                  console.log(`❌ Failed to extract UQLOAD TV source: ${originalSource.url}`);
+                }
+              });
+
+              if (validUqloadResults.length > 0) {
+                // Prioriser les sources VF puis VOSTFR pour UQLOAD
+                const uqloadVfSources = validUqloadResults.filter(s => s.label.includes('VF'));
+                const uqloadVostfrSources = validUqloadResults.filter(s => s.label.includes('VOSTFR'));
+                const prioritizedUqloadSources = [...uqloadVfSources, ...uqloadVostfrSources];
+
+                finalFileSources = [...prioritizedUqloadSources, ...finalFileSources];
+                console.log(`✅ UQLOAD TV extraction completed. Added ${validUqloadResults.length} UQLOAD file sources to final sources`);
+              } else {
+                console.log('❌ No valid UQLOAD TV sources extracted from Wiflix results');
+              }
+            } catch (error) {
+              console.error('❌ Error during UQLOAD TV extraction:', error);
+            }
+          } else {
+            console.log('ℹ️ No UQLOAD TV sources found in Wiflix results');
+          }
+        }
+
+        // =========== EXTRACTION DOODSTREAM DEPUIS WIFLIX TV (DEUXIÈME SECTION) ===========
+        if (wiflixProcessedSources.length > 0) {
+          const doodStreamSources = wiflixProcessedSources.filter(source =>
+            isDoodStreamEmbed(source.url)
+          );
+
+          if (doodStreamSources.length > 0) {
+            console.log(`🎬 Found ${doodStreamSources.length} DoodStream sources in Wiflix TV (2nd), extracting...`);
+
+            const doodExtractionPromises = doodStreamSources.map(async (doodSource) => {
+              try {
+                const doodResult = await extractDoodStreamFile(doodSource.url);
+                return { result: doodResult, originalSource: doodSource };
+              } catch (error) {
+                console.error('Error extracting DoodStream source:', error);
+                return { result: null, originalSource: doodSource };
+              }
+            });
+
+            const doodExtractionResults = await Promise.all(doodExtractionPromises);
+
+            const validDoodResults: { url: string; label: string }[] = [];
+            doodExtractionResults.forEach(({ result, originalSource }) => {
+              if (result?.success && result.m3u8Url) {
+                validDoodResults.push({
+                  url: result.m3u8Url,
+                  label: `DoodStream ${originalSource.category || ''}`
+                });
+              }
+            });
+
+            if (validDoodResults.length > 0) {
+              const doodVfSources = validDoodResults.filter(s => s.label.includes('VF'));
+              const doodVostfrSources = validDoodResults.filter(s => s.label.includes('VOSTFR'));
+              finalFileSources = [...doodVfSources, ...doodVostfrSources, ...finalFileSources];
+              console.log(`✅ DoodStream Wiflix extraction (2nd) completed. Added ${validDoodResults.length} sources.`);
+            }
+          }
+        }
+
+        // =========== EXTRACTION SEEKSTREAMING DEPUIS WIFLIX TV (DEUXIÈME SECTION) ===========
+        if (wiflixProcessedSources.length > 0) {
+          const seekStreamingSources = wiflixProcessedSources.filter(source =>
+            isSeekStreamingEmbed(source.url)
+          );
+
+          if (seekStreamingSources.length > 0) {
+            console.log(`🎬 Found ${seekStreamingSources.length} SeekStreaming sources in Wiflix TV (2nd), extracting...`);
+
+            const seekExtractionPromises = seekStreamingSources.map(async (seekSource) => {
+              try {
+                const seekResult = await extractSeekStreamingM3u8(seekSource.url);
+                return { result: seekResult, originalSource: seekSource };
+              } catch (error) {
+                console.error('Error extracting SeekStreaming source:', error);
+                return { result: null, originalSource: seekSource };
+              }
+            });
+
+            const seekExtractionResults = await Promise.all(seekExtractionPromises);
+
+            const validSeekResults: { url: string; label: string }[] = [];
+            seekExtractionResults.forEach(({ result, originalSource }) => {
+              if (result?.success && result.hlsUrl) {
+                validSeekResults.push({
+                  url: result.hlsUrl,
+                  label: `SeekStreaming HLS ${originalSource.category || ''}`
+                });
+              }
+            });
+
+            if (validSeekResults.length > 0) {
+              const seekVfSources = validSeekResults.filter(s => s.label.includes('VF'));
+              const seekVostfrSources = validSeekResults.filter(s => s.label.includes('VOSTFR'));
+              finalHlsSources = [...seekVfSources, ...seekVostfrSources, ...finalHlsSources];
+              console.log(`✅ SeekStreaming Wiflix extraction (2nd) completed. Added ${validSeekResults.length} sources.`);
+            }
+          }
+        }
+
+        // =========== TRAITEMENT DES RÉSULTATS VIPER ===========
+        const viperProcessedSources: { url: string; label: string; quality: string; language: string }[] = [];
+        if (viperResult && viperResult.links) {
+          console.log('🎬 Processing Viper TV result:', viperResult);
+          setViperData(viperResult);
+
+          const vfLinks = viperResult.links.vf || [];
+          const vostfrLinks = viperResult.links.vostfr || [];
+
+          vfLinks.forEach((link: { server: string; url: string }) => {
+            viperProcessedSources.push({
+              url: link.url,
+              label: link.server,
+              quality: 'HD',
+              language: 'VF'
+            });
+          });
+
+          vostfrLinks.forEach((link: { server: string; url: string }) => {
+            viperProcessedSources.push({
+              url: link.url,
+              label: link.server,
+              quality: 'HD',
+              language: 'VOSTFR'
+            });
+          });
+
+          setViperSources(viperProcessedSources);
+          console.log(`✅ Viper TV sources processed: ${viperProcessedSources.length}`);
+
+          // =========== EXTRACTION VOE DEPUIS VIPER ===========
+          if (viperProcessedSources.length > 0) {
+            console.log('🔍 Extracting VOE sources from Viper...');
+
+            const voeViperSources = viperProcessedSources.filter(source =>
+              source.label.toLowerCase().includes('voe') || isVoeEmbed(source.url)
+            );
+
+            if (voeViperSources.length > 0) {
+              console.log(`🎬 Found ${voeViperSources.length} VOE sources in Viper, extracting...`);
+
+              const voeExtractionPromises = voeViperSources.map(async (voeSource) => {
+                try {
+                  console.log(`[VOE/VIPER][TV] Extracting VOE m3u8 from Viper link: ${voeSource.url}`);
+                  const voeResult = await extractVoeM3u8(voeSource.url);
+                  return { result: voeResult, originalSource: voeSource };
+                } catch (error) {
+                  console.error('Error extracting VOE source from Viper:', error);
+                  return { result: null, originalSource: voeSource };
+                }
+              });
+
+              const voeExtractionResults = await Promise.all(voeExtractionPromises);
+
+              const validVoeResults: { url: string; label: string }[] = [];
+              voeExtractionResults.forEach(({ result, originalSource }) => {
+                if (result?.success && result.hlsUrl) {
+                  validVoeResults.push({
+                    url: result.hlsUrl,
+                    label: `Voe HLS ${originalSource.language}`
+                  });
+                  console.log(`✅ Added Viper VOE HLS source: ${result.hlsUrl}`);
+                } else {
+                  console.log(`❌ Failed to extract Viper VOE source: ${originalSource.url}`);
+                }
+              });
+
+              if (validVoeResults.length > 0) {
+                const vf = validVoeResults.filter(s => s.label.includes('VF'));
+                const vostfr = validVoeResults.filter(s => s.label.includes('VOSTFR'));
+                finalHlsSources = [...vf, ...vostfr, ...finalHlsSources];
+                console.log(`✅ Viper VOE extraction completed. Added ${validVoeResults.length} sources.`);
+              }
+            }
+          }
+
+          // =========== EXTRACTION UQLOAD DEPUIS VIPER ===========
+          if (viperProcessedSources.length > 0) {
+            console.log('🔍 Extracting UQLOAD sources from Viper...');
+
+            const uqloadViperSources = viperProcessedSources.filter(source =>
+              source.label.toLowerCase().includes('uqload') || source.url.toLowerCase().includes('uqload')
+            );
+
+            if (uqloadViperSources.length > 0) {
+              console.log(`🎬 Found ${uqloadViperSources.length} UQLOAD sources in Viper, extracting...`);
+
+              const uqloadExtractionPromises = uqloadViperSources.map(async (uqloadSource) => {
+                try {
+                  console.log(`[UQLOAD/VIPER][TV] Extracting UQLOAD file from Viper link: ${uqloadSource.url}`);
+                  const uqloadResult = await extractUqloadFile(normalizeUqloadEmbedUrl(uqloadSource.url), MAIN_API);
+                  return { result: uqloadResult, originalSource: uqloadSource };
+                } catch (error) {
+                  console.error('Error extracting UQLOAD source from Viper:', error);
+                  return { result: null, originalSource: uqloadSource };
+                }
+              });
+
+              const uqloadExtractionResults = await Promise.all(uqloadExtractionPromises);
+
+              const validUqloadResults: { url: string; label: string }[] = [];
+              uqloadExtractionResults.forEach(({ result, originalSource }) => {
+                if (result?.success && (result.hlsUrl || result.m3u8Url)) {
+                  const extractedUrl = result.hlsUrl || result.m3u8Url || '';
+                  validUqloadResults.push({
+                    url: extractedUrl,
+                    label: `Uqload ${originalSource.language}`
+                  });
+                  console.log(`✅ Added Viper UQLOAD source: ${extractedUrl}`);
+                } else {
+                  console.log(`❌ Failed to extract Viper UQLOAD source: ${originalSource.url}`);
+                }
+              });
+
+              if (validUqloadResults.length > 0) {
+                const vf = validUqloadResults.filter(s => s.label.includes('VF'));
+                const vostfr = validUqloadResults.filter(s => s.label.includes('VOSTFR'));
+                finalHlsSources = [...finalHlsSources, ...vf, ...vostfr];
+                console.log(`✅ Viper UQLOAD extraction completed. Added ${validUqloadResults.length} sources.`);
+              }
+            }
+          }
+
+          // =========== EXTRACTION DOODSTREAM DEPUIS VIPER (DEUXIÈME SECTION) ===========
+          if (viperProcessedSources.length > 0) {
+            const doodViperSources = viperProcessedSources.filter(source =>
+              source.label.toLowerCase().includes('dood') || isDoodStreamEmbed(source.url)
+            );
+
+            if (doodViperSources.length > 0) {
+              console.log(`🎬 Found ${doodViperSources.length} DoodStream sources in Viper (2nd), extracting...`);
+
+              const doodExtractionPromises = doodViperSources.map(async (doodSource) => {
+                try {
+                  const doodResult = await extractDoodStreamFile(doodSource.url);
+                  return { result: doodResult, originalSource: doodSource };
+                } catch (error) {
+                  console.error('Error extracting DoodStream source from Viper:', error);
+                  return { result: null, originalSource: doodSource };
+                }
+              });
+
+              const doodExtractionResults = await Promise.all(doodExtractionPromises);
+              const validDoodResults: { url: string; label: string }[] = [];
+              doodExtractionResults.forEach(({ result, originalSource }) => {
+                if (result?.success && result.m3u8Url) {
+                  validDoodResults.push({
+                    url: result.m3u8Url,
+                    label: `DoodStream ${originalSource.language}`
+                  });
+                }
+              });
+
+              if (validDoodResults.length > 0) {
+                const vf = validDoodResults.filter(s => s.label.includes('VF'));
+                const vostfr = validDoodResults.filter(s => s.label.includes('VOSTFR'));
+                finalFileSources = [...vf, ...vostfr, ...finalFileSources];
+                console.log(`✅ Viper DoodStream extraction (2nd) completed. Added ${validDoodResults.length} sources.`);
+              }
+            }
+          }
+
+          // =========== EXTRACTION SEEKSTREAMING DEPUIS VIPER (DEUXIÈME SECTION) ===========
+          if (viperProcessedSources.length > 0) {
+            const seekViperSources = viperProcessedSources.filter(source =>
+              source.label.toLowerCase().includes('seekstream') || source.label.toLowerCase().includes('embed4me') || isSeekStreamingEmbed(source.url)
+            );
+
+            if (seekViperSources.length > 0) {
+              console.log(`🎬 Found ${seekViperSources.length} SeekStreaming sources in Viper (2nd), extracting...`);
+
+              const seekExtractionPromises = seekViperSources.map(async (seekSource) => {
+                try {
+                  const seekResult = await extractSeekStreamingM3u8(seekSource.url);
+                  return { result: seekResult, originalSource: seekSource };
+                } catch (error) {
+                  console.error('Error extracting SeekStreaming source from Viper:', error);
+                  return { result: null, originalSource: seekSource };
+                }
+              });
+
+              const seekExtractionResults = await Promise.all(seekExtractionPromises);
+              const validSeekResults: { url: string; label: string }[] = [];
+              seekExtractionResults.forEach(({ result, originalSource }) => {
+                if (result?.success && result.hlsUrl) {
+                  validSeekResults.push({
+                    url: result.hlsUrl,
+                    label: `SeekStreaming HLS ${originalSource.language}`
+                  });
+                }
+              });
+
+              if (validSeekResults.length > 0) {
+                const vf = validSeekResults.filter(s => s.label.includes('VF'));
+                const vostfr = validSeekResults.filter(s => s.label.includes('VOSTFR'));
+                finalHlsSources = [...vf, ...vostfr, ...finalHlsSources];
+                console.log(`✅ Viper SeekStreaming extraction (2nd) completed. Added ${validSeekResults.length} sources.`);
+              }
+            }
+          }
+        } else {
+          setViperData(null);
+          setViperSources([]);
+        }
+
+        // =========== TRAITEMENT DES RÉSULTATS VOX ===========
+        let voxProcessedSources: { name: string; link: string }[] = [];
+        if (voxResult && voxResult.success && voxResult.data && voxResult.data.length > 0) {
+          console.log('Vox sources found:', voxResult.data.length);
+          setVoxData(voxResult);
+          voxProcessedSources = voxResult.data;
+          setVoxSources(voxProcessedSources);
+
+          // =========== EXTRACTION VOE/VIDMOLY DEPUIS VOX ===========
+          if (voxProcessedSources.length > 0) {
+            console.log('🔍 Extracting Voe/Vidmoly sources from Vox...');
+            const voeVoxSources = voxProcessedSources.filter(s => s.name.toLowerCase().includes('voe'));
+
+            if (voeVoxSources.length > 0) {
+              console.log(`🎬 Found ${voeVoxSources.length} VOE sources in Vox, extracting...`);
+
+              const voeExtractionPromises = voeVoxSources.map(async (voeSource) => {
+                try {
+                  console.log(`[VOE/VOX][TV] Extracting VOE m3u8 from Vox link: ${voeSource.link}`);
+                  const voeResult = await extractVoeM3u8(voeSource.link);
+                  return { result: voeResult, originalSource: voeSource };
+                } catch (error) {
+                  console.error('Error extracting VOE source from Vox:', error);
+                  return { result: null, originalSource: voeSource };
+                }
+              });
+
+              const voeExtractionResults = await Promise.all(voeExtractionPromises);
+
+              const validVoeResults: { url: string; label: string }[] = [];
+              voeExtractionResults.forEach(({ result }) => {
+                if (result?.success && result.hlsUrl) {
+                  validVoeResults.push({
+                    url: result.hlsUrl,
+                    label: 'Voe (Vox) HLS'
+                  });
+                  console.log(`✅ Added Vox VOE HLS source: ${result.hlsUrl}`);
+                }
+              });
+
+              if (validVoeResults.length > 0) {
+                finalHlsSources = [...finalHlsSources, ...validVoeResults];
+              }
+            }
+
+            // =========== EXTRACTION VIDMOLY DEPUIS VOX ===========
+            const vidmolyVoxSources = voxProcessedSources.filter(s => s.name.toLowerCase().includes('vidmoly'));
+            if (vidmolyVoxSources.length > 0) {
+              console.log(`🎬 Found ${vidmolyVoxSources.length} Vidmoly sources in Vox, extracting...`);
+              const vidmolyExtractionPromises = vidmolyVoxSources.map(async (vidmolySource) => {
+                try {
+                  console.log(`[VIDMOLY/VOX][TV] Extracting Vidmoly M3U8 from Vox link: ${vidmolySource.link}`);
+                  const vidmolyResult = await extractVidmolyM3u8(vidmolySource.link, MAIN_API);
+                  return { result: vidmolyResult, originalSource: vidmolySource };
+                } catch (error) {
+                  console.error('Error extracting Vidmoly source from Vox:', error);
+                  return { result: null, originalSource: vidmolySource };
+                }
+              });
+
+              const vidmolyExtractionResults = await Promise.all(vidmolyExtractionPromises);
+              const validVidmolyResults: { url: string; label: string }[] = [];
+              vidmolyExtractionResults.forEach(({ result }) => {
+                if (result?.success && result.m3u8Url) {
+                  validVidmolyResults.push({
+                    url: result.m3u8Url,
+                    label: 'Vidmoly (Vox) HLS'
+                  });
+                  console.log(`✅ Added Vox Vidmoly HLS source: ${result.m3u8Url}`);
+                }
+              });
+
+              if (validVidmolyResults.length > 0) {
+                finalHlsSources = [...finalHlsSources, ...validVidmolyResults];
+              }
+            }
+          }
+        } else {
+          console.log('Vox source not available from API');
+          setVoxData(null);
+          setVoxSources([]);
+        }
+
+        // Ajouter les sources HLS FStream aux sources finales
+        if (fstreamHlsSources.length > 0) {
+          // Prioriser les sources VF puis Default pour FStream HLS
+          const fsvidVfSources = fstreamHlsSources.filter(s => s.category === 'VF');
+          const fsvidDefaultSources = fstreamHlsSources.filter(s => s.category === 'Default');
+          const fsvidOtherSources = fstreamHlsSources.filter(s => s.category !== 'VF' && s.category !== 'Default');
+
+          const prioritizedFstreamHls = [...fsvidVfSources, ...fsvidDefaultSources, ...fsvidOtherSources];
+          finalHlsSources = [...prioritizedFstreamHls, ...finalHlsSources];
+          console.log(`🎯 Added ${fstreamHlsSources.length} FStream TV HLS sources to final sources`);
+        }
+
+        // Set the final sources
+        setNexusHlsSources(finalHlsSources);
+        setNexusFileSources(finalFileSources);
+
+        // =========== FIN DES EXTRACTIONS ===========
+        console.log('✅ Extractions M3U8 terminées');
+        setLoadingExtractions(false);
+
+        // Check for Sibnet links for anime
+        if (show.genres.some((genre: any) => genre.id === 16)) { // 16 is Animation genre
+          setLoadingSibnet(true);
+          try {
+            const sibnetVideoId = extractSibnetIdFromUrl();
+            if (sibnetVideoId) {
+              const sibnetSourceUrl = await checkSibnetAvailability(sibnetVideoId);
+              setSibnetUrl(sibnetSourceUrl);
+            }
+          } catch (error) {
+            console.error('Error checking Sibnet availability:', error);
+          } finally {
+            setLoadingSibnet(false);
+          }
+        }
+
+        // ========== DETERMINE DEFAULT SELECTED SOURCE (Harmonized with WatchMovie.tsx) ==========
+        // Priorité : embedseek (custom) > nexus (hls/file) > darkino > m3u8 (adFree) > mp4 > fstream > omega > wiflix > viper > coflix > frembed > custom > vox > vostfr
+
+        console.log('=== INITIALFETCH SOURCE PRIORITY LOGIC ===');
+        console.log('Final HLS sources (Nexus + extracted):', finalHlsSources.length);
+        console.log('Final File sources (Nexus + extracted):', finalFileSources.length);
+        console.log('Darkino available:', darkinoResult && typeof darkinoResult === 'object' ? darkinoResult.available : false);
+        console.log('Darkino sources count:', darkinoResult && typeof darkinoResult === 'object' ? darkinoResult.sources?.length : 0);
+        console.log('MP4 sources count:', fetchedMp4Sources.length);
+        console.log('Viper sources count:', viperProcessedSources.length);
+        console.log('FStream sources count:', fstreamProcessedSources.length);
+        console.log('AdFree M3U8 URL:', adFreeM3u8Url);
+        console.log('Custom sources available:', customLinksResult.customLinks?.length || 0);
+
+        // PRIORITÉ 1: Vérifier si un lien embedseek existe dans les custom sources
+        const embedseekLink = customLinksResult.customLinks?.find((link: string) =>
+          link.toLowerCase().includes('embedseek.com')
+        );
+
+        if (finalHlsSources.length > 0) {
+          console.log('✅ Selecting NEXUS HLS as primary source');
+          setSelectedSource('nexus_hls');
+          setSelectedNexusHlsSource(0);
+          setVideoSource(finalHlsSources[0].url);
+          currentSourceRef.current = 'nexus_hls';
+          setEmbedUrl(null);
+          setEmbedType(null);
+          setOnlyVostfrAvailable(false);
+        } else if (embedseekLink) {
+          console.log('✅ Selecting EMBEDSEEK (Custom) as PRIMARY source');
+          console.log('🎯 Selected Embedseek URL:', embedseekLink);
+          setSelectedSource('custom');
+          setEmbedUrl(embedseekLink);
+          setEmbedType('custom');
+          currentSourceRef.current = 'custom';
+          setOnlyVostfrAvailable(false);
+        } else if (finalFileSources.length > 0) {
+          console.log('✅ Selecting NEXUS FILE as primary source');
+          setSelectedSource('nexus_file');
+          setSelectedNexusFileSource(0);
+          setVideoSource(finalFileSources[0].url);
+          currentSourceRef.current = 'nexus_file';
+          setEmbedUrl(null);
+          setEmbedType(null);
+          setOnlyVostfrAvailable(false);
+        } else if (fetchedMp4Sources.length > 0) {
+          setSelectedSource('mp4');
+          setSelectedMp4Source(0);
+          setVideoSource(fetchedMp4Sources[0].url);
+          currentSourceRef.current = 'mp4';
+          setEmbedUrl(null);
+          setEmbedType(null);
+          setOnlyVostfrAvailable(false);
+        } else if (darkinoResult && darkinoResult.available && darkinoResult.sources.length > 0) {
+          console.log('✅ Selecting DARKINO as fallback source');
+          setSelectedSource('darkino');
+          setSelectedDarkinoSource(0);
+          setEmbedUrl(null);
+          setEmbedType(null);
+        } else if (isOmegaAvailable && rawOmegaData) {
+          // Omega: cherche Supervideo en priorité
+          let supervideo = null;
+          const omegaPlayers = extractOmegaPlayers(rawOmegaData, seasonNumber, episodeNumber);
+          supervideo = omegaPlayers.find((p: any) => p.player && p.player.toLowerCase().includes('supervideo'));
+
+          if (supervideo) {
+            console.log('✅ Selecting OMEGA (Supervideo) as fallback source');
+            setSelectedSource('omega');
+            setEmbedUrl(supervideo.link);
+            setEmbedType('omega');
+            currentSourceRef.current = 'omega';
+          } else if (wiflixProcessedSources.length > 0) {
+            console.log('✅ Selecting WIFLIX/LYNX as fallback source (Omega Supervideo not found)');
+            setSelectedSource('wiflix');
+            setSelectedWiflixSource(0);
+            setEmbedUrl(wiflixProcessedSources[0].url);
+            setEmbedType('wiflix');
+            currentSourceRef.current = 'wiflix';
+            setOnlyVostfrAvailable(false);
+          } else if (viperProcessedSources.length > 0) {
+            console.log('✅ Selecting VIPER as fallback source (Omega branch)');
+            setSelectedSource('viper' as any);
+            setSelectedViperSource(0);
+            setEmbedUrl(viperProcessedSources[0].url);
+            setEmbedType('viper');
+            currentSourceRef.current = 'viper';
+            setOnlyVostfrAvailable(false);
+          }
+        } else if (wiflixProcessedSources.length > 0) {
+          console.log('✅ Selecting WIFLIX/LYNX as fallback source (Omega not available)');
+          setSelectedSource('wiflix');
+          setSelectedWiflixSource(0);
+          setEmbedUrl(wiflixProcessedSources[0].url);
+          setEmbedType('wiflix');
+          currentSourceRef.current = 'wiflix';
+          setOnlyVostfrAvailable(false);
+        } else if (viperProcessedSources.length > 0) {
+          console.log('✅ Selecting VIPER as fallback source');
+          setSelectedSource('viper' as any);
+          setSelectedViperSource(0);
+          setEmbedUrl(viperProcessedSources[0].url);
+          setEmbedType('viper');
+          currentSourceRef.current = 'viper';
+          setOnlyVostfrAvailable(false);
+        } else if (adFreeM3u8Url) { // adFreeM3u8Url state is used here as it's set by its own promise
+          console.log('✅ Selecting AD-FREE M3U8 as fallback source');
+          setSelectedSource('m3u8');
+          setVideoSource(adFreeM3u8Url);
+          currentSourceRef.current = 'm3u8';
+          setEmbedUrl(null);
+          setEmbedType(null);
+        } else if (fetchedMp4Sources.length > 0) {
+          console.log('✅ Selecting MP4 as fallback source');
+          setSelectedSource('mp4');
+          setSelectedMp4Source(0);
+          setVideoSource(fetchedMp4Sources[0].url);
+          currentSourceRef.current = 'mp4';
+          setEmbedUrl(null);
+          setEmbedType(null);
+        } else if (fstreamProcessedSources.length > 0) {
+          // Si pas de sources VIP ou extraction échouée, utiliser les autres sources FStream
+          console.log('✅ Selecting FSTREAM as fallback source');
+          setSelectedSource('fstream');
+          setSelectedFstreamSource(0);
+          setEmbedUrl(getProxyUrl(fstreamProcessedSources[0].url));
+          setEmbedType('fstream');
+          currentSourceRef.current = 'fstream';
+          setOnlyVostfrAvailable(false);
+        } else {
+          let supervideo = null;
+          if (rawOmegaData && isOmegaAvailable) { // Check isOmegaAvailable directly
+            const players = extractOmegaPlayers(rawOmegaData, seasonNumber, episodeNumber);
+            supervideo = players.find((p: any) => p.player && p.player.toLowerCase().includes('supervideo'));
+          }
+          if (supervideo) {
+            setSelectedSource('omega');
+            setEmbedUrl(supervideo.link);
+            setEmbedType('omega');
+            currentSourceRef.current = 'omega';
+          } else if (wiflixProcessedSources.length > 0) {
+            console.log('✅ Selecting WIFLIX/LYNX as fallback source');
+            setSelectedSource('wiflix');
+            setSelectedWiflixSource(0);
+            setEmbedUrl(wiflixProcessedSources[0].url);
+            setEmbedType('wiflix');
+            currentSourceRef.current = 'wiflix';
+            setOnlyVostfrAvailable(false);
+          } else if (viperProcessedSources.length > 0) {
+            console.log('✅ Selecting VIPER as fallback source (deep fallback)');
+            setSelectedSource('viper' as any);
+            setSelectedViperSource(0);
+            setEmbedUrl(viperProcessedSources[0].url);
+            setEmbedType('viper');
+            currentSourceRef.current = 'viper';
+            setOnlyVostfrAvailable(false);
+          } else {
+            // Coflix: prefer lecteur6 / French multi links, but treat any multi links as a valid coflix embed
+            let multiLinks = [];
+            if (coflixResult) {
+              multiLinks = (coflixResult.current_episode && coflixResult.current_episode.player_links)
+                ? coflixResult.current_episode.player_links
+                : coflixResult.player_links || [];
+            }
+            const hasLecteur6 = multiLinks.some((p: any) => getCoflixPreferredUrl(p).toLowerCase().includes('lecteur6'));
+
+            if (multiLinks.length > 0) {
+              if (!hasLecteur6 && fetchedMp4Sources.length > 0) {
+                setSelectedSource('mp4');
+                setSelectedMp4Source(0);
+                setVideoSource(fetchedMp4Sources[0].url);
+                currentSourceRef.current = 'mp4';
+                setEmbedUrl(null);
+                setEmbedType(null);
+              } else {
+                const preferred = multiLinks.find((p: any) =>
+                  (p.language && typeof p.language === 'string' && p.language.toLowerCase().includes('french')) ||
+                  (p.quality && typeof p.quality === 'string' && p.quality.toLowerCase().includes('french')) ||
+                  getCoflixPreferredUrl(p).toLowerCase().includes('lecteur6')
+                ) || multiLinks[0];
+                const url = getCoflixPreferredUrl(preferred);
+                setSelectedSource('coflix');
+                setEmbedUrl(url);
+                setEmbedType('coflix');
+                currentSourceRef.current = 'coflix';
+              }
+            }
+            // Try FStream sources (dans le fallback, on peut utiliser toutes les sources)
+            else if (fstreamProcessedSources.length > 0) {
+              console.log('✅ Selecting FSTREAM as fallback source (final fallback)');
+              const selectedIndex = 0;
+              setSelectedSource('fstream');
+              setSelectedFstreamSource(selectedIndex);
+              setEmbedUrl(getProxyUrl(fstreamProcessedSources[selectedIndex].url));
+              setEmbedType('fstream');
+              currentSourceRef.current = 'fstream';
+            }
+            else if (frembedAvailabilityResult) { // Use frembedAvailabilityResult
+              setSelectedSource('frembed');
+              setEmbedUrl(`https://frembed.bond/api/serie.php?id=${id}&sa=${seasonNumber}&epi=${episodeNumber}`);
+              setEmbedType('frembed');
+              currentSourceRef.current = 'frembed';
+            } else if (customLinksResult.customLinks && customLinksResult.customLinks.length > 0) {
+              setSelectedSource('custom');
+              setEmbedUrl(customLinksResult.customLinks[0]);
+              setEmbedType('custom');
+              currentSourceRef.current = 'custom';
+            } else if (voxProcessedSources.length > 0) {
+              setSelectedSource('vox');
+              setSelectedVoxSource(0);
+              setEmbedUrl(voxProcessedSources[0].link);
+              setEmbedType('vox');
+              currentSourceRef.current = 'vox';
+              setOnlyVostfrAvailable(false);
+            } else {
+              setSelectedSource('vostfr');
+              setOnlyVostfrAvailable(true);
+              currentSourceRef.current = 'vostfr';
+            }
+          }
+        }
+
+        // Get next episode info
+        // This try-catch is for fetchNextEpisodeData only
+        try {
+          await fetchNextEpisodeData();
+        } catch (error) {
+          console.error('Error fetching next episode:', error);
+        }
+
+        setIsLoading(false);
+      } catch (error) { // This catch belongs to the main try block starting after initialFetch declaration
+        console.error("Error loading TV data:", error);
+        setLoadingError(true);
+        setLoadingText(t('watch.dataLoadError'));
+        setLoadingExtractions(false);
+        setIsLoading(false);
+      } // End of main try-catch block
+    }; // End of initialFetch function
+
+    initialFetch();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, seasonNumber, episodeNumber]); // Rerun if essential params change
+
+  // Progress saving functionality removed
+
+  // --- Event Listener for Source Changes from HLSPlayer Menu ---
+  useEffect(() => {
+    const handleSourceChangeFromMenu = (event: CustomEvent) => {
+      const { type, url } = event.detail as { type: PlayerSourceType | string, url: string, id?: string | number };
+
+      // When a source is picked from the menu, hide the "no content" message and the menu itself
+      // Exception: ne pas fermer le menu pour rivestream_hls car c'est juste un déclencheur de chargement
+      // OU si on est en train de charger les sources Rivestream
+      setOnlyVostfrAvailable(false);
+      if (type !== 'rivestream_hls' && !isLoadingRivestreamRef.current) {
+        setShowEmbedQuality(false);
+      }
+
+      // Handle HLS source selections
+      if (type === 'nexus_hls' || type === 'nexus_file' || type === 'darkino' || type === 'mp4' || type === 'm3u8' || type === 'sibnet' || type === 'rivestream_hls' || type === 'rivestream' || type === 'bravo') {
+        // Ne pas cacher l'iframe si c'est juste le déclencheur de chargement Rivestream
+        if (type !== 'rivestream_hls') {
+          setEmbedUrl(null); // Hide iframe
+          setEmbedType(null);
+        }
+
+        if (type === 'nexus_hls') {
+          const index = nexusHlsSources.findIndex(s => s.url === url);
+          if (index !== -1) {
+            setSelectedNexusHlsSource(index);
+            setSelectedSource('nexus_hls');
+            setVideoSource(nexusHlsSources[index].url);
+            currentSourceRef.current = 'nexus_hls';
+          } else if (nexusHlsSources.length > 0) {
+            setSelectedNexusHlsSource(0);
+            setSelectedSource('nexus_hls');
+            setVideoSource(nexusHlsSources[0].url);
+            currentSourceRef.current = 'nexus_hls';
+          }
+        } else if (type === 'nexus_file') {
+          const index = nexusFileSources.findIndex(s => s.url === url);
+          if (index !== -1) {
+            setSelectedNexusFileSource(index);
+            setSelectedSource('nexus_file');
+            setVideoSource(nexusFileSources[index].url);
+            currentSourceRef.current = 'nexus_file';
+          } else if (nexusFileSources.length > 0) {
+            setSelectedNexusFileSource(0);
+            setSelectedSource('nexus_file');
+            setVideoSource(nexusFileSources[0].url);
+            currentSourceRef.current = 'nexus_file';
+          }
+        } else if (type === 'darkino') {
+          const index = darkinoSources.findIndex(s => s.m3u8 === url);
+          if (index !== -1) {
+            setSelectedDarkinoSource(index);
+            setSelectedSource('darkino');
+            currentSourceRef.current = 'darkino';
+          } else {
+            if (darkinoSources.length > 0) {
+              setSelectedDarkinoSource(0);
+              setSelectedSource('darkino');
+              currentSourceRef.current = 'darkino';
+            }
+          }
+        } else if (type === 'mp4') {
+          // Extract index from event id (e.g. 'mp4_3' -> 3)
+          const mp4Idx = parseInt(String(event.detail.id || '').split('_')[1], 10);
+
+          const index = mp4Sources.findIndex(s => s.url === url);
+          if (index !== -1) {
+            setSelectedMp4Source(index);
+            setSelectedSource('mp4');
+            setVideoSource(mp4Sources[index].url);
+            currentSourceRef.current = 'mp4';
+          } else {
+            if (mp4Sources.length > 0) {
+              setSelectedMp4Source(0);
+              setSelectedSource('mp4');
+              setVideoSource(mp4Sources[0].url);
+              currentSourceRef.current = 'mp4';
+            }
+          }
+        } else if (type === 'm3u8') {
+          const m3u8UrlToUse = url || adFreeM3u8Url;
+          if (m3u8UrlToUse) {
+            setSelectedSource('m3u8');
+            setVideoSource(m3u8UrlToUse);
+            currentSourceRef.current = 'm3u8';
+          } else {
+            if (darkinoAvailable) {
+              setSelectedSource('darkino');
+              setSelectedDarkinoSource(0);
+              currentSourceRef.current = 'darkino';
+            } else if (mp4Sources.length > 0) {
+              setSelectedSource('mp4');
+              setSelectedMp4Source(0);
+              setVideoSource(mp4Sources[0].url);
+              currentSourceRef.current = 'mp4';
+            }
+          }
+        }
+        else if (type === 'sibnet' && sibnetUrl) {
+          setSelectedSource('mp4'); // Treat as mp4
+          setVideoSource(sibnetUrl);
+          currentSourceRef.current = 'mp4';
+        }
+        else if (type === 'rivestream_hls' && event.detail.id === 'rivestream_retry') {
+          // CAS PRIORITAIRE: retry avec un nouveau proxy - utiliser directement l'URL fournie
+          console.log('🔄 [WatchTv] Rivestream proxy retry with new URL:', url);
+          setSelectedSource('rivestream_hls');
+          setVideoSource(url);
+          currentSourceRef.current = 'rivestream_hls';
+          setEmbedUrl(null);
+          setEmbedType(null);
+        }
+        else if (type === 'rivestream_hls') {
+          // Vérifier si Rivestream est disponible (VIP check si activé)
+          if (!isRivestreamAvailable()) {
+            console.log('🚫 Rivestream sources are only available for VIP users');
+            return;
+          }
+          // Déclencher le chargement des sources Rivestream
+          if (rivestreamSources.length === 0 && !loadingRivestream) {
+            console.log('🎬 [WatchTv] Rivestream button clicked, triggering fetch');
+            setRivestreamLoaded(false); // Reset pour permettre un nouveau chargement
+            fetchRivestreamSources();
+          } else {
+            console.log('🎬 [WatchTv] Rivestream button clicked!', {
+              rivestreamLoaded,
+              loadingRivestream,
+              sourcesCount: rivestreamSources.length
+            });
+          }
+        }
+        else if (type === 'rivestream') {
+          // Sélection d'une source Rivestream spécifique depuis le menu
+          const index = rivestreamSources.findIndex(s => s.url === url);
+          if (index !== -1) {
+            setSelectedRivestreamSource(index);
+            setSelectedSource('rivestream');
+            setVideoSource(rivestreamSources[index].url);
+            currentSourceRef.current = 'rivestream';
+          }
+        }
+        else if (type === 'bravo') {
+          // Sélection d'une source Bravo (PurStream) depuis le menu
+          const index = purstreamSources.findIndex(s => s.url === url);
+          if (index !== -1) {
+            setSelectedSource('bravo');
+            setVideoSource(purstreamSources[index].url);
+            currentSourceRef.current = 'bravo';
+          } else if (purstreamSources.length > 0) {
+            setSelectedSource('bravo');
+            setVideoSource(purstreamSources[0].url);
+            currentSourceRef.current = 'bravo';
+          }
+        }
+      }
+      // Handle Embed source selections
+      else if (type === 'frembed' || type === 'custom' || type === 'vostfr' || type === 'omega' || type === 'coflix' || type === 'fstream' || type === 'wiflix' || type === 'viper' || type === 'adfree' || type === 'vox') {
+        setEmbedUrl(type === 'fstream' ? getProxyUrl(url) : url);
+        setEmbedType(type as string); // type is known to be a string here
+        setSelectedSource(type as PlayerSourceType);
+        currentSourceRef.current = type as PlayerSourceType; // Or null for embeds if ref not used
+
+        // Handle FStream source selection
+        if (type === 'fstream') {
+          const index = fstreamSources.findIndex(s => s.url === url);
+          if (index !== -1) {
+            setSelectedFstreamSource(index);
+          } else if (fstreamSources.length > 0) {
+            setSelectedFstreamSource(0);
+            setEmbedUrl(getProxyUrl(fstreamSources[0].url));
+          }
+
+          // Ne pas déclencher le popup ads si on change juste de source FStream
+          // Le popup ne doit se déclencher qu'au chargement initial, pas lors du changement de source
+        }
+        // Handle Wiflix source selection
+        else if (type === 'wiflix') {
+          const index = wiflixSources.findIndex(s => s.url === url);
+          if (index !== -1) {
+            setSelectedWiflixSource(index);
+          } else if (wiflixSources.length > 0) {
+            setSelectedWiflixSource(0);
+            setEmbedUrl(wiflixSources[0].url);
+          }
+        }
+        // Handle Viper source selection
+        else if (type === 'viper') {
+          const index = viperSources.findIndex(s => s.url === url);
+          if (index !== -1) {
+            setSelectedViperSource(index);
+            console.log(`✅ [WatchTv] Playing Viper source #${index}: ${viperSources[index].label}`);
+          } else if (viperSources.length > 0) {
+            setSelectedViperSource(0);
+            setEmbedUrl(viperSources[0].url);
+          }
+        }
+        // Handle Vox source selection
+        else if (type === 'vox') {
+          const index = voxSources.findIndex(s => s.link === url);
+          if (index !== -1) {
+            setSelectedVoxSource(index);
+          } else if (voxSources.length > 0) {
+            setSelectedVoxSource(0);
+            setEmbedUrl(voxSources[0].link);
+          }
+        }
+      }
+      // Handle dropdown toggles (no state change needed here)
+      else if (type === 'darkino_main' || type === 'omega_main' || type === 'multi_main' || type === 'vostfr_main' || type === 'fstream_main' || type === 'wiflix_main') {
+        // console.log(`[WatchTv] Dropdown toggle ignored: ${type}`);
+      }
+      // Handle unknown types
+      else {
+        // console.warn(`[WatchTv] Unknown source type received: ${type}`);
+      }
+    };
+    window.addEventListener('sourceChange', handleSourceChangeFromMenu as EventListener);
+    return () => {
+      window.removeEventListener('sourceChange', handleSourceChangeFromMenu as EventListener);
+    };
+  }, [
+    nexusHlsSources, nexusFileSources, darkinoSources, mp4Sources, adFreeM3u8Url, sibnetUrl, darkinoAvailable, fstreamSources, rivestreamSources, viperSources, // Data sources
+    setOnlyVostfrAvailable, setShowEmbedQuality, // State setters for visibility
+    setEmbedUrl, setEmbedType, setSelectedSource, // General source setters
+    setSelectedNexusHlsSource, setSelectedNexusFileSource, setSelectedDarkinoSource, setSelectedMp4Source, setSelectedFstreamSource, setVideoSource, setSelectedViperSource, // HLS specific setters
+    loadingRivestream, rivestreamLoaded, fetchRivestreamSources, // Rivestream specific
+    currentSourceRef, isLoadingRivestreamRef // Refs
+  ]);
+
+  // --- Render Logic ---
+
+  // Determine the current source URL for HLSPlayer based on selectedSource state
+  let hlsSrc = '';
+  if (selectedSource === 'nexus_hls' && nexusHlsSources.length > selectedNexusHlsSource) {
+    hlsSrc = nexusHlsSources[selectedNexusHlsSource]?.url || '';
+    if (!hlsSrc) {
+      console.error(`[Debug] Invalid nexus hls source at index ${selectedNexusHlsSource}`, nexusHlsSources[selectedNexusHlsSource]);
+    }
+  } else if (selectedSource === 'nexus_file' && nexusFileSources.length > selectedNexusFileSource) {
+    hlsSrc = nexusFileSources[selectedNexusFileSource]?.url || '';
+    if (!hlsSrc) {
+      console.error(`[Debug] Invalid nexus file source at index ${selectedNexusFileSource}`, nexusFileSources[selectedNexusFileSource]);
+    }
+  } else if (selectedSource === 'darkino' && darkinoSources.length > selectedDarkinoSource) {
+    hlsSrc = darkinoSources[selectedDarkinoSource]?.m3u8 || '';
+    if (!hlsSrc) {
+      console.error(`[Debug] Invalid darkino source at index ${selectedDarkinoSource}`, darkinoSources[selectedDarkinoSource]);
+    }
+  } else if (selectedSource === 'mp4') {
+    // Use videoSource as the primary source if available
+    hlsSrc = videoSource || '';
+
+    // Fallback logic if videoSource is not set
+    if (!hlsSrc) {
+      if (sibnetUrl) {
+        hlsSrc = sibnetUrl;
+      } else if (mp4Sources.length > selectedMp4Source) {
+        hlsSrc = mp4Sources[selectedMp4Source]?.url || '';
+        if (!hlsSrc) {
+          console.error(`[Debug] Invalid mp4 source at index ${selectedMp4Source}`, mp4Sources[selectedMp4Source]);
+        }
+      }
+    }
+  } else if (selectedSource === 'm3u8' && adFreeM3u8Url) {
+    hlsSrc = adFreeM3u8Url;
+  } else if (selectedSource === 'rivestream' && rivestreamSources.length > selectedRivestreamSource) {
+    hlsSrc = rivestreamSources[selectedRivestreamSource]?.url || '';
+    if (!hlsSrc) {
+      console.error(`[Debug] Invalid rivestream source at index ${selectedRivestreamSource}`, rivestreamSources[selectedRivestreamSource]);
+    }
+  } else if (selectedSource === 'rivestream_hls') {
+    // Cas spécifique pour le retry Rivestream qui définit directement videoSource
+    hlsSrc = videoSource || '';
+  } else if (selectedSource === 'bravo') {
+    // Sources Bravo (PurStream) — utilise videoSource défini lors de la sélection
+    hlsSrc = videoSource || '';
+  }
+
+  // Sauvegarder la dernière source valide
+  if (hlsSrc && hlsSrc.trim() !== '') {
+    lastValidHlsSrcRef.current = hlsSrc;
+  }
+
+  // Si on charge Rivestream et qu'on n'a pas de source, utiliser la dernière source valide
+  if (loadingRivestream && (!hlsSrc || hlsSrc.trim() === '')) {
+    hlsSrc = lastValidHlsSrcRef.current;
+  }
+
+  // Add debug logging if source type is selected but no url is available
+  if (selectedSource && (selectedSource === 'darkino' || selectedSource === 'mp4' || selectedSource === 'm3u8' || selectedSource === 'rivestream') && !hlsSrc && !loadingRivestream) {
+    console.error(`[Debug] Source type ${selectedSource} selected but no URL available`);
+    console.info('darkinoSources:', darkinoSources);
+    console.info('mp4Sources:', mp4Sources);
+    console.info('sibnetUrl:', sibnetUrl);
+    console.info('videoSource:', videoSource);
+    console.info('adFreeM3u8Url:', adFreeM3u8Url);
+  }
+
+  // Determine the poster for HLSPlayer
+
+  // Function to handle source change events from HLSPlayer or other components
+  const handleSourceChange = useCallback((type: PlayerSourceType | string, id: string | number, url?: string) => {
+
+    // Determine the base type (e.g., 'darkino' from 'darkino_0')
+    const baseType = typeof type === 'string' ? type.split('_')[0] : type;
+    const index = typeof type === 'string' ? parseInt(type.split('_')[1] || '0', 10) : 0;
+
+    // Hide Embeds if selecting an HLS/MP4 source
+    if (['nexus_hls', 'nexus_file', 'darkino', 'mp4', 'm3u8', 'sibnet', 'rivestream'].includes(String(baseType))) {
+      setEmbedUrl(null);
+      setEmbedType(null);
+    }
+
+    switch (baseType) {
+      case 'nexus_hls':
+        if (nexusHlsSources.length > index) {
+          setSelectedNexusHlsSource(index);
+          setSelectedSource('nexus_hls');
+          setVideoSource(nexusHlsSources[index].url);
+          currentSourceRef.current = 'nexus_hls';
+        } else {
+          console.error(`[WatchTv] Invalid Nexus HLS index: ${index}`);
+        }
+        break;
+      case 'nexus_file':
+        if (nexusFileSources.length > index) {
+          setSelectedNexusFileSource(index);
+          setSelectedSource('nexus_file');
+          setVideoSource(nexusFileSources[index].url);
+          currentSourceRef.current = 'nexus_file';
+        } else {
+          console.error(`[WatchTv] Invalid Nexus File index: ${index}`);
+        }
+        break;
+      case 'darkino':
+        if (darkinoSources.length > index) {
+          setSelectedDarkinoSource(index);
+          setSelectedSource('darkino');
+          currentSourceRef.current = 'darkino';
+        } else {
+          console.error(`[WatchTv] Invalid Darkino index: ${index}`);
+        }
+        break;
+      case 'mp4':
+        if (mp4Sources.length > index) {
+          setSelectedMp4Source(index);
+          setSelectedSource('mp4');
+          setVideoSource(mp4Sources[index].url);
+          currentSourceRef.current = 'mp4';
+        } else {
+          console.error(`[WatchTv] Invalid MP4 index: ${index}`);
+        }
+        break;
+      case 'sibnet':
+        if (sibnetUrl) {
+          setSelectedSource('mp4'); // Treat as mp4
+          setVideoSource(sibnetUrl);
+          currentSourceRef.current = 'mp4';
+        } else {
+          console.error(`[WatchTv] Sibnet URL not available`);
+        }
+        break;
+      case 'm3u8':
+        if (adFreeM3u8Url) {
+          setSelectedSource('m3u8');
+          setVideoSource(adFreeM3u8Url);
+          currentSourceRef.current = 'm3u8';
+        } else {
+          console.error(`[WatchTv] M3U8 URL not available`);
+        }
+        break;
+      case 'frembed':
+        const frembedUrl = `https://frembed.bond/api/serie.php?id=${id}&sa=${seasonNumber}&epi=${episodeNumber}`;
+        setEmbedUrl(frembedUrl);
+        setEmbedType('frembed');
+        setSelectedSource('frembed');
+        break;
+      case 'custom':
+        // Find the custom source URL by index (assuming id is the index)
+        if (typeof id === 'number' && customSources.length > id) {
+          setEmbedUrl(customSources[id]);
+          setEmbedType('custom');
+          setSelectedSource('custom');
+        } else if (typeof url === 'string') { // Fallback if URL is directly provided
+          setEmbedUrl(url);
+          setEmbedType('custom');
+          setSelectedSource('custom');
+        } else {
+          console.error(`[WatchTv] Invalid Custom source index/URL: ${id}`);
+        }
+        break;
+      case 'omega':
+        // Find the omega source URL by index (assuming id is the index)
+        if (omegaData?.players && typeof id === 'number' && omegaData.players.length > id) {
+          setEmbedUrl(omegaData.players[id].link);
+          setEmbedType('omega');
+          setSelectedSource('omega');
+        } else if (typeof url === 'string') { // Fallback if URL is directly provided
+          setEmbedUrl(url);
+          setEmbedType('omega');
+          setSelectedSource('omega');
+        } else {
+          console.error(`[WatchTv] Invalid Omega source index/URL: ${id}`);
+        }
+        break;
+      case 'fstream':
+        // Find the FStream source URL by index (assuming id is the index)
+        if (typeof id === 'number' && fstreamSources.length > id) {
+          setEmbedUrl(getProxyUrl(fstreamSources[id].url));
+          setEmbedType('fstream');
+          setSelectedSource('fstream');
+          setSelectedFstreamSource(id);
+        } else if (typeof url === 'string') { // Fallback if URL is directly provided
+          setEmbedUrl(getProxyUrl(url));
+          setEmbedType('fstream');
+          setSelectedSource('fstream');
+        } else {
+          console.error(`[WatchTv] Invalid FStream source index/URL: ${id}`);
+        }
+        break;
+      case 'rivestream':
+        if (url) {
+          // Sélectionner une source Rivestream spécifique par URL
+          const rivestreamIndex = rivestreamSources.findIndex(s => s.url === url);
+          if (rivestreamIndex !== -1) {
+            setSelectedRivestreamSource(rivestreamIndex);
+            setSelectedSource('rivestream');
+            setVideoSource(rivestreamSources[rivestreamIndex].url);
+            currentSourceRef.current = 'rivestream';
+          }
+        } else if (rivestreamSources.length > index) {
+          // Sélectionner par index
+          setSelectedRivestreamSource(index);
+          setSelectedSource('rivestream');
+          setVideoSource(rivestreamSources[index].url);
+          currentSourceRef.current = 'rivestream';
+        } else {
+          console.error(`[WatchTv] Invalid Rivestream index: ${index}`);
+        }
+        break;
+      case 'viper':
+        // Find the Viper source URL by index (assuming id is the index)
+        if (typeof id === 'number' && viperSources.length > id) {
+          setEmbedUrl(viperSources[id].url);
+          setEmbedType('viper');
+          setSelectedSource('viper');
+          setSelectedViperSource(id);
+        } else if (typeof url === 'string') { // Fallback if URL is directly provided
+          const vIndex = viperSources.findIndex(s => s.url === url);
+          if (vIndex !== -1) setSelectedViperSource(vIndex);
+          setEmbedUrl(url);
+          setEmbedType('viper');
+          setSelectedSource('viper');
+        } else {
+          console.error(`[WatchTv] Invalid Viper source index/URL: ${id}`);
+        }
+        break;
+      case 'vox':
+        // Find the Vox source URL by index (assuming id is the index)
+        if (typeof id === 'number' && voxSources.length > id) {
+          setEmbedUrl(voxSources[id].link);
+          setEmbedType('vox');
+          setSelectedSource('vox');
+          setSelectedVoxSource(id);
+        } else if (typeof url === 'string') { // Fallback if URL is directly provided
+          const vIndex = voxSources.findIndex(s => s.link === url);
+          if (vIndex !== -1) setSelectedVoxSource(vIndex);
+          setEmbedUrl(url);
+          setEmbedType('vox');
+          setSelectedSource('vox');
+        } else {
+          console.error(`[WatchTv] Invalid Vox source index/URL: ${id}`);
+        }
+        break;
+      // Add cases for 'vostfr' or others if needed
+      default:
+        console.warn(`[WatchTv] Unknown source type in handleSourceChange: ${type}`);
+    }
+
+  }, [nexusHlsSources, nexusFileSources, darkinoSources, mp4Sources, adFreeM3u8Url, customSources, omegaData, fstreamSources, rivestreamSources, sibnetUrl, viperSources, voxSources, id, seasonNumber, episodeNumber]); // Include all dependencies
+
+  // Memoize callback functions for HLSPlayer
+  const handleHlsError = useCallback(() => {
+    console.error(`Error playing HLS source: ${selectedSource}`);
+
+    // Try the next source or fallback to other sources
+    if (selectedSource === 'darkino') {
+      // Try to find the next valid darkino source
+      let nextValidIndex = -1;
+      for (let i = selectedDarkinoSource + 1; i < darkinoSources.length; i++) {
+        if (darkinoSources[i]?.m3u8 && darkinoSources[i].m3u8.trim() !== '') {
+          nextValidIndex = i;
+          break;
+        }
+      }
+
+      if (nextValidIndex !== -1) {
+        console.log(`Trying next valid darkino source: ${nextValidIndex + 1} of ${darkinoSources.length}`);
+        setSelectedDarkinoSource(nextValidIndex);
+      }
+      // If we've tried all darkino sources, try nexus sources first
+      else if (nexusHlsSources.length > 0) {
+        console.log(`All darkino sources failed, switching to nexus HLS source`);
+        setSelectedSource('nexus_hls');
+        setSelectedNexusHlsSource(0);
+        setVideoSource(nexusHlsSources[0].url);
+      }
+      // If no nexus HLS, try nexus file sources
+      else if (nexusFileSources.length > 0) {
+        console.log(`No nexus HLS sources, switching to nexus file source`);
+        setSelectedSource('nexus_file');
+        setSelectedNexusFileSource(0);
+        setVideoSource(nexusFileSources[0].url);
+      }
+      // If no nexus sources, try mp4 sources
+      else if (mp4Sources.length > 0) {
+        console.log(`No nexus sources available, switching to mp4 source`);
+        setSelectedSource('mp4');
+        setSelectedMp4Source(0);
+        setVideoSource(mp4Sources[0].url);
+      }
+      // If no mp4 sources, try fstream
+      else if (fstreamSources.length > 0) {
+        console.log(`No mp4 sources available, switching to fstream`);
+        setSelectedSource('fstream');
+        setSelectedFstreamSource(0);
+        setEmbedUrl(getProxyUrl(fstreamSources[0].url));
+        setEmbedType('fstream');
+      }
+      // If no fstream sources, try omega
+      else if (omegaData && extractOmegaPlayers(omegaData, seasonNumber, episodeNumber).length > 0) {
+        console.log(`No mp4 sources available, switching to omega`);
+        const omegaPlayers = extractOmegaPlayers(omegaData, seasonNumber, episodeNumber);
+        setSelectedSource('omega');
+        setEmbedUrl(omegaPlayers[0].link);
+        setEmbedType('omega');
+      }
+      // If no omega, try coflix
+      else if (coflixData && coflixData.player_links && coflixData.player_links.length > 0) {
+        console.log(`No omega sources available, switching to coflix`);
+        setSelectedSource('coflix');
+        setEmbedUrl(getCoflixPreferredUrl(coflixData.player_links[0]));
+        setEmbedType('coflix');
+      }
+      // If no coflix, try frembed
+      else if (frembedAvailable && id) {
+        console.log(`No coflix sources available, switching to frembed`);
+        handleSourceChange('frembed', String(id));
+      }
+      // Note: Ne pas forcer vostfr automatiquement - laisser l'utilisateur choisir depuis le menu
+      else {
+        console.log(`No viable sources found, user must choose manually`);
+      }
+    }
+    // Handle mp4 source errors
+    else if (selectedSource === 'mp4') {
+      // Try the next mp4 source if available
+      if (selectedMp4Source < mp4Sources.length - 1) {
+        console.log(`Trying next mp4 source: ${selectedMp4Source + 1} of ${mp4Sources.length}`);
+        const nextIndex = selectedMp4Source + 1;
+        setSelectedMp4Source(nextIndex);
+        setVideoSource(mp4Sources[nextIndex]?.url);
+      }
+      // If we've tried all mp4 sources and darkino is available, try darkino
+      else if (darkinoSources.length > 0) {
+        console.log(`All mp4 sources failed, switching to darkino source`);
+        setSelectedSource('darkino');
+        setSelectedDarkinoSource(0);
+      }
+      // If no darkino, try nexus sources
+      else if (nexusHlsSources.length > 0) {
+        console.log(`No darkino sources available, switching to nexus HLS source`);
+        setSelectedSource('nexus_hls');
+        setSelectedNexusHlsSource(0);
+        setVideoSource(nexusHlsSources[0].url);
+      }
+      // If no nexus HLS, try nexus file sources
+      else if (nexusFileSources.length > 0) {
+        console.log(`No nexus HLS sources, switching to nexus file source`);
+        setSelectedSource('nexus_file');
+        setSelectedNexusFileSource(0);
+        setVideoSource(nexusFileSources[0].url);
+      }
+      // If no nexus sources, try omega
+      else if (omegaData && extractOmegaPlayers(omegaData, seasonNumber, episodeNumber).length > 0) {
+        console.log(`No nexus sources available, switching to omega`);
+        const omegaPlayers = extractOmegaPlayers(omegaData, seasonNumber, episodeNumber);
+        setSelectedSource('omega');
+        setEmbedUrl(omegaPlayers[0].link);
+        setEmbedType('omega');
+      }
+      // If no omega, try coflix
+      else if (coflixData && coflixData.player_links && coflixData.player_links.length > 0) {
+        console.log(`No omega sources available, switching to coflix`);
+        setSelectedSource('coflix');
+        setEmbedUrl(getCoflixPreferredUrl(coflixData.player_links[0]));
+        setEmbedType('coflix');
+      }
+      // If no coflix, try frembed
+      else if (frembedAvailable && id) {
+        console.log(`No coflix sources available, switching to frembed`);
+        handleSourceChange('frembed', String(id));
+      }
+      // Note: Ne pas forcer vostfr automatiquement - laisser l'utilisateur choisir depuis le menu
+      else {
+        console.log(`No viable sources found, user must choose manually`);
+      }
+    }
+    // Handle m3u8 source errors
+    else if (selectedSource === 'm3u8') {
+      // If m3u8 fails, try darkino if available
+      if (darkinoSources.length > 0) {
+        console.log(`m3u8 source failed, switching to darkino source`);
+        setSelectedSource('darkino');
+        setSelectedDarkinoSource(0);
+      }
+      // If no darkino, try mp4
+      else if (mp4Sources.length > 0) {
+        console.log(`No darkino sources available, switching to mp4 source`);
+        setSelectedSource('mp4');
+        setSelectedMp4Source(0);
+        setVideoSource(mp4Sources[0].url);
+      }
+      // If no mp4 sources, try fstream
+      else if (fstreamSources.length > 0) {
+        console.log(`No mp4 sources available, switching to fstream`);
+        setSelectedSource('fstream');
+        setSelectedFstreamSource(0);
+        setEmbedUrl(getProxyUrl(fstreamSources[0].url));
+        setEmbedType('fstream');
+      }
+      // If no fstream sources, try omega
+      else if (omegaData && extractOmegaPlayers(omegaData, seasonNumber, episodeNumber).length > 0) {
+        console.log(`No mp4 sources available, switching to omega`);
+        const omegaPlayers = extractOmegaPlayers(omegaData, seasonNumber, episodeNumber);
+        setSelectedSource('omega');
+        setEmbedUrl(omegaPlayers[0].link);
+        setEmbedType('omega');
+      }
+      // If no omega, try coflix
+      else if (coflixData && coflixData.player_links && coflixData.player_links.length > 0) {
+        console.log(`No omega sources available, switching to coflix`);
+        setSelectedSource('coflix');
+        setEmbedUrl(getCoflixPreferredUrl(coflixData.player_links[0]));
+        setEmbedType('coflix');
+      }
+      // If no coflix, try frembed
+      else if (frembedAvailable && id) {
+        console.log(`No coflix sources available, switching to frembed`);
+        handleSourceChange('frembed', String(id));
+      }
+      // Note: Ne pas forcer vostfr automatiquement - laisser l'utilisateur choisir depuis le menu
+      else {
+        console.log(`No viable sources found, user must choose manually`);
+      }
+    }
+    // Handle omega source errors
+    else if (selectedSource === 'omega') {
+      // If omega fails, try coflix
+      if (coflixData && coflixData.player_links && coflixData.player_links.length > 0) {
+        console.log(`Omega source failed, switching to coflix`);
+        setSelectedSource('coflix');
+        setEmbedUrl(getCoflixPreferredUrl(coflixData.player_links[0]));
+        setEmbedType('coflix');
+      }
+      // If no coflix, try frembed
+      else if (frembedAvailable && id) {
+        console.log(`No coflix sources available, switching to frembed`);
+        handleSourceChange('frembed', String(id));
+      }
+      // Note: Ne pas forcer vostfr automatiquement - laisser l'utilisateur choisir depuis le menu
+      else {
+        console.log(`No viable sources found, user must choose manually`);
+      }
+    }
+    // Handle coflix source errors
+    else if (selectedSource === 'coflix') {
+      // If coflix fails, try frembed
+      if (frembedAvailable && id) {
+        console.log(`Coflix source failed, switching to frembed`);
+        handleSourceChange('frembed', String(id));
+      }
+      // Note: Ne pas forcer vostfr automatiquement - laisser l'utilisateur choisir depuis le menu
+      else {
+        console.log(`No viable sources found, user must choose manually`);
+      }
+    }
+    // Default fallback for other source types
+    else if (frembedAvailable && id) {
+      handleSourceChange('frembed', String(id));
+    }
+    // Note: Ne pas forcer vostfr automatiquement - laisser l'utilisateur choisir depuis le menu
+  }, [selectedSource, selectedDarkinoSource, darkinoSources, mp4Sources, id, videoSource, selectedMp4Source, handleSourceChange, frembedAvailable, seasonNumber, episodeNumber]);
+
+
+
+  // Callback for HLSPlayer previous episode button
+  const handlePreviousEpisodeNavCallback = useCallback(() => {
+    let targetSeason = seasonNumber;
+    let targetEpisode = episodeNumber;
+
+    if (episodeNumber > 1) {
+      targetEpisode = episodeNumber - 1;
+    } else if (seasonNumber > 1) {
+      targetSeason = seasonNumber - 1;
+      // Trouver le dernier épisode de la saison précédente
+      const previousSeason = seasons.find(s => s.season_number === targetSeason);
+      targetEpisode = previousSeason ? previousSeason.episode_count : 1; // Fallback à 1
+    }
+
+    // Naviguer seulement si la cible est différente
+    if (targetSeason !== seasonNumber || targetEpisode !== episodeNumber) {
+      handleNextEpisodeNav(targetSeason, targetEpisode); // Utilise la fonction de navigation existante
+    }
+  }, [seasonNumber, episodeNumber, seasons, handleNextEpisodeNav]);
+
+  // Memoize object props for HLSPlayer
+  const hlsTvShowProp = useMemo(() => ({
+    name: showTitle,
+    backdrop_path: backdropPath || undefined
+  }), [showTitle, backdropPath]);
+
+  const hlsNextEpisodeProp = useMemo(() => (
+    nextEpisodeData ? {
+      seasonNumber: nextEpisodeData.season_number,
+      episodeNumber: nextEpisodeData.episode_number,
+      name: nextEpisodeData.name,
+      overview: nextEpisodeData.overview,
+      vote_average: nextEpisodeData.vote_average
+    } : null
+  ), [nextEpisodeData]);
+
+  // Function to load VO/VOSTFR player when user chooses to
+  const handleLoadVostfr = useCallback(() => {
+    setShowEmbedQuality(true); // Show sources menu only, keep "onlyVostfrAvailable" true for now
+  }, [setShowEmbedQuality]);
+
+  // Listener pour l'événement showSourcesMenu (déclenché par HLSPlayer en cas d'erreur 403)
+  useEffect(() => {
+    const handleShowSourcesMenu = () => {
+      setShowEmbedQuality(true);
+    };
+    window.addEventListener('showSourcesMenu', handleShowSourcesMenu);
+    return () => {
+      window.removeEventListener('showSourcesMenu', handleShowSourcesMenu);
+    };
+  }, []);
+
+  // Fix for React error #300 - Make sure omegaData is not rendered directly
+  // useEffect(() => {
+  //   if (omegaData && typeof omegaData === 'object' && !Array.isArray(omegaData)) {
+  //     // Clean up omegaData to ensure it's correctly structured
+  //     if (!omegaData.players || !Array.isArray(omegaData.players)) {
+  //       setOmegaData({ players: [] });
+  //     }
+  //   }
+  // }, [omegaData]);
+
+  // Ajouter cette fonction d'aide avant le return du composant
+  const extractOmegaPlayers = (omegaData: any, seasonNumber?: number, episodeNumber?: number) => {
+    if (!omegaData) return [];
+    // Si players à la racine (jamais le cas pour TV, mais sécurité)
+    if (omegaData.players && Array.isArray(omegaData.players)) {
+      return omegaData.players;
+    }
+    // Nouvelle extraction compatible avec la structure Omega TV
+    if (omegaData.type === 'tv' && omegaData.series && omegaData.series.length > 0) {
+      const series = omegaData.series[0];
+      // Recherche de la saison et de l'épisode
+      const currentSeasonNumber = seasonNumber || parseInt(new URLSearchParams(window.location.search).get('season') || '1', 10);
+      const currentEpisodeNumber = episodeNumber?.toString() || new URLSearchParams(window.location.search).get('episode') || '1';
+      const season = series.seasons?.find((s: { number: number }) => s.number === currentSeasonNumber);
+      const episode = season?.episodes?.find((e: { number: string }) => e.number == String(currentEpisodeNumber));
+      console.log('[Omega DEBUG]', { season, episodes: season?.episodes, currentEpisodeNumber, found: episode });
+      if (episode && episode.versions) {
+        // On fusionne tous les players VF et VOSTFR si présents
+        let players: any[] = [];
+        if (episode.versions.vf && episode.versions.vf.players) {
+          players = players.concat(episode.versions.vf.players.map((player: { name: string; link: string }) => ({
+            player: player.name,
+            link: player.link,
+            is_hd: false,
+            label: 'Sans pubs',
+            lang: 'VF',
+          })));
+        }
+        if (episode.versions.vostfr && episode.versions.vostfr.players) {
+          players = players.concat(episode.versions.vostfr.players.map((player: { name: string; link: string }) => ({
+            player: player.name,
+            link: player.link,
+            is_hd: false,
+            label: 'Sans pubs',
+            lang: 'VOSTFR',
+          })));
+        }
+        console.log('[Omega DEBUG] extractOmegaPlayers:', { players, omegaData, episode, season, currentSeasonNumber, currentEpisodeNumber });
+        return players;
+      }
+    }
+    console.log('[Omega DEBUG] extractOmegaPlayers: no players', { omegaData, seasonNumber, episodeNumber });
+    return [];
+  };
+
+  useEffect(() => {
+    // On ne fait rien si VIP activé
+    if (import.meta.env.is_vip === 'true' || import.meta.env.is_vip === true || localStorage.getItem('is_vip') === 'true') {
+      console.log('🚫 VIP activé, popup désactivée');
+      return;
+    }
+    // On ne fait rien si déjà passé le popup ou si popup déjà affiché
+    if (adPopupTriggered || adPopupBypass) {
+      console.log('🚫 Popup déjà déclenchée ou bypass activé:', { adPopupTriggered, adPopupBypass });
+      return;
+    }
+    // Quand tous les chargements sont terminés
+    if (!loadingDarkino && !loadingCoflix && !loadingOmega && !loadingCustom && !loadingSibnet && !loadingFrembed && !loadingFstream && !loadingWiflix && !loadingVox) {
+      console.log('🎭 Vérification popup pour source:', selectedSource);
+
+      // NOUVEAU: Déclencher le popup pour TOUS les lecteurs dès qu'une source est sélectionnée
+      if (selectedSource && !adPopupTriggered) {
+        console.log('🎭 Déclenchement popup pour source TV:', selectedSource);
+
+        // Vérifier s'il n'y a que des sources VO/VOSTFR disponibles
+        const hasVfSources = darkinoSources.length > 0 ||
+          (mp4Sources.length > 0 && !mp4Sources.every(source =>
+            source.language === 'VOSTFR' || source.language === 'VO'
+          )) ||
+          sibnetUrl ||
+          adFreeM3u8Url ||
+          (omegaData && extractOmegaPlayers(omegaData, seasonNumber, episodeNumber).length > 0) ||
+          (coflixData?.player_links && coflixData.player_links.length > 0) ||
+          (fstreamSources.length > 0 && fstreamSources.some(source =>
+            source.category === 'VF' || source.category === 'VFQ'
+          )) ||
+          (wiflixSources.length > 0 && wiflixSources.some(source =>
+            source.category === 'VF'
+          )) ||
+          (viperSources.length > 0 && viperSources.some(source =>
+            source.language === 'VF'
+          )) ||
+          (voxSources.length > 0); // Assuming Vox is mostly VF/VOSTFR, consider generic check
+
+        const isVoVostfrOnly = !hasVfSources;
+
+        // Déclencher le popup avec le type de lecteur approprié
+        let playerType = selectedSource;
+        let additionalInfo: any = { isVoVostfrOnly };
+
+        // Mapper les types de sources aux types de lecteurs pour le popup
+        switch (selectedSource) {
+          case 'nexus_hls':
+          case 'nexus_file':
+            playerType = 'nexus_' + selectedSource.split('_')[1];
+            break;
+          case 'darkino':
+          case 'mp4':
+          case 'm3u8':
+            playerType = 'darkino';
+            break;
+          case 'omega':
+            playerType = 'omega';
+            const extractedPlayers = extractOmegaPlayers(omegaData, seasonNumber, episodeNumber);
+            additionalInfo = {
+              omegaData: {
+                player_links: extractedPlayers.map((p: { player: string; link: string; is_hd?: boolean; label?: string; lang?: string }) => ({ player: p.player, link: p.link }))
+              },
+              isVoVostfrOnly
+            };
+            break;
+          case 'coflix':
+            playerType = 'multi';
+            additionalInfo = { coflixData, isVoVostfrOnly };
+            break;
+          case 'fstream':
+            playerType = 'fstream';
+            break;
+          case 'wiflix':
+            playerType = 'wiflix';
+            break;
+          case 'viper':
+            playerType = 'viper';
+            break;
+          case 'vox':
+            playerType = 'vox';
+            break;
+          case 'frembed':
+            playerType = 'frembed';
+            break;
+          case 'custom':
+            playerType = 'adfree'; // Type générique pour les liens custom
+            break;
+          default:
+            // Pour les autres types (embed URLs, etc.)
+            if (typeof selectedSource === 'string') {
+              playerType = 'adfree'; // Type générique
+            } else {
+              playerType = 'adfree'; // Type par défaut
+            }
+            break;
+        }
+
+        console.log(`🎭 Popup déclenché pour ${playerType} (source TV: ${selectedSource})`);
+        showPopupForPlayer(playerType, additionalInfo);
+        setAdPopupTriggered(true);
+        return;
+      }
+    }
+  }, [loadingDarkino, loadingCoflix, loadingOmega, loadingCustom, loadingSibnet, loadingFrembed, loadingFstream, loadingWiflix, loadingVox, selectedSource, darkinoSources, mp4Sources, sibnetUrl, adFreeM3u8Url, omegaData, coflixData, fstreamSources, wiflixSources, voxSources, adPopupTriggered, adPopupBypass, showPopupForPlayer, seasonNumber, episodeNumber, extractOmegaPlayers]);
+
+  // Si on ferme le popup (croix), on bloque définitivement l'accès au lecteur (pas de bypass)
+  useEffect(() => {
+    // Si on ferme le popup (croix) ET qu'on n'a PAS cliqué sur la pub, on bloque l'accès au lecteur
+    if (!showAdFreePopup && adPopupTriggered && !shouldLoadIframe && !hasClickedAd) {
+      setAdPopupBypass(true); // On bloque l'accès au lecteur
+    }
+    // Si on ferme le popup (croix) ET qu'on a cliqué sur la pub, on laisse passer (pas de blocage)
+  }, [showAdFreePopup, adPopupTriggered, shouldLoadIframe, hasClickedAd]);
+
+  // All useEffect and hooks must be here, before any return
+
+  useEffect(() => {
+    const setVh = () => {
+      document.documentElement.style.setProperty('--vh', `${window.innerHeight * 0.01}px`);
+    };
+    setVh();
+    window.addEventListener('resize', setVh);
+    return () => window.removeEventListener('resize', setVh);
+  }, []);
+
+  useEffect(() => {
+    document.body.style.overflow = 'hidden';
+    document.body.style.height = '100vh';
+    document.documentElement.style.overflow = 'hidden';
+    document.documentElement.style.height = '100vh';
+    return () => {
+      document.body.style.overflow = '';
+      document.body.style.height = '';
+      document.documentElement.style.overflow = '';
+      document.documentElement.style.height = '';
+    };
+  }, []);
+
+  // Now, after all hooks, you can do conditional returns:
+  if (showAdFreePopup && adPopupTriggered && !adPopupBypass) {
+    return <AdFreePlayerAds onClose={handlePopupClose} onAccept={handlePopupAccept} adType={adType} onAdClick={() => setHasClickedAd(true)} />;
+  }
+  if (adPopupBypass) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full bg-black">
+        <div className="text-white text-2xl font-bold mb-4">{t('watch.mustWatchAd')}</div>
+        <div className="text-gray-400 text-lg">{t('watch.reloadToRetry')}</div>
+      </div>
+    );
+  }
+  // Si la popup doit être affichée mais n'est pas encore montrée, attendre
+  if (adPopupTriggered && !shouldLoadIframe && !hasClickedAd) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full bg-black">
+        <div className="text-white text-2xl font-bold mb-4">{t('watch.loading')}</div>
+        <div className="text-gray-400 text-lg">{t('watch.pleaseWait')}</div>
+      </div>
+    );
+  }
+
+  // Age restriction blocking screen
+  if (isBlocked) {
+    return (
+      <div className="min-h-screen bg-gradient-to-b from-gray-900 to-black flex items-center justify-center px-4">
+        <div className="text-center max-w-md">
+          <div className="w-20 h-20 bg-red-600/20 rounded-full flex items-center justify-center mx-auto mb-6">
+            <svg className="w-10 h-10 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+            </svg>
+          </div>
+          <h2 className="text-2xl font-bold text-white mb-3">{t('details.contentBlocked')}</h2>
+          <p className="text-gray-400 mb-6">
+            {t('details.contentBlockedDesc', { rating: getClassificationLabel(contentCert, t), age: currentProfile?.ageRestriction ?? 0 })}
+          </p>
+          <button
+            onClick={() => navigate(-1)}
+            className="px-6 py-3 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors font-medium"
+          >
+            {t('details.goBack')}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const preMidSourceDetail = (() => {
+    switch (selectedSource) {
+      case 'darkino': {
+        const source = darkinoSources[selectedDarkinoSource];
+        return formatPremidSourceDetail(
+          source?.label || source?.quality || (darkinoSources.length > 0 ? `Source ${selectedDarkinoSource + 1}` : undefined),
+          source?.language,
+        );
+      }
+      case 'nexus_hls': {
+        const source = nexusHlsSources[selectedNexusHlsSource];
+        return formatPremidSourceDetail(
+          source?.label || (source ? `Source ${selectedNexusHlsSource + 1}` : undefined),
+        );
+      }
+      case 'nexus_file': {
+        const source = nexusFileSources[selectedNexusFileSource];
+        return formatPremidSourceDetail(
+          source?.label || (source ? `Source ${selectedNexusFileSource + 1}` : undefined),
+        );
+      }
+      case 'mp4': {
+        const source =
+          mp4Sources.find(entry => entry.url === videoSource) ||
+          mp4Sources[selectedMp4Source];
+        return formatPremidSourceDetail(
+          source?.label || (source ? `Source ${selectedMp4Source + 1}` : sibnetUrl ? 'Sibnet' : undefined),
+          source?.language,
+          source?.isVip ? 'VIP' : undefined,
+        );
+      }
+      case 'm3u8':
+        return sibnetUrl && videoSource === sibnetUrl ? 'Sibnet' : undefined;
+      case 'fstream': {
+        const source =
+          fstreamSources.find(entry => entry.url === embedUrl) ||
+          fstreamSources[selectedFstreamSource];
+        return formatPremidSourceDetail(source?.label, source?.category);
+      }
+      case 'wiflix': {
+        const source =
+          wiflixSources.find(entry => entry.url === embedUrl) ||
+          wiflixSources[selectedWiflixSource];
+        return formatPremidSourceDetail(source?.label, source?.category);
+      }
+      case 'viper': {
+        const source =
+          viperSources.find(entry => entry.url === embedUrl) ||
+          viperSources[selectedViperSource];
+        return formatPremidSourceDetail(
+          source?.label,
+          source?.quality,
+          source?.language,
+        );
+      }
+      case 'vox': {
+        const source =
+          voxSources.find(entry => entry.link === embedUrl) ||
+          voxSources[selectedVoxSource];
+        return formatPremidSourceDetail(source?.name);
+      }
+      case 'rivestream':
+      case 'rivestream_hls': {
+        const source =
+          rivestreamSources.find(entry => entry.url === videoSource) ||
+          rivestreamSources[selectedRivestreamSource];
+        return formatPremidSourceDetail(source?.label, source?.service);
+      }
+      case 'bravo': {
+        const source =
+          purstreamSources.find(entry => entry.url === videoSource) ||
+          purstreamSources[0];
+        return formatPremidSourceDetail(source?.label);
+      }
+      default:
+        return undefined;
+    }
+  })();
+
+  return (
+    <div style={{ minHeight: 'calc(var(--vh, 1vh) * 100)', overflow: 'hidden' }} className="w-full bg-black text-white overflow-hidden fixed inset-0">
+      <style dangerouslySetInnerHTML={{
+        __html: `
+          .loading-container {
+            --uib-size: 35px;
+            --uib-color: white;
+            --uib-speed: 1s;
+            --uib-stroke: 3.5px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            width: var(--uib-size);
+            height: calc(var(--uib-size) * 0.9);
+          }
+
+          .loading-bar {
+            width: var(--uib-stroke);
+            height: 100%;
+            background-color: var(--uib-color);
+            border-radius: calc(var(--uib-stroke) / 2);
+            transition: background-color 0.3s ease;
+          }
+
+          .loading-bar:nth-child(1) {
+            animation: grow var(--uib-speed) ease-in-out calc(var(--uib-speed) * -0.45) infinite;
+          }
+
+          .loading-bar:nth-child(2) {
+            animation: grow var(--uib-speed) ease-in-out calc(var(--uib-speed) * -0.3) infinite;
+          }
+
+          .loading-bar:nth-child(3) {
+            animation: grow var(--uib-speed) ease-in-out calc(var(--uib-speed) * -0.15) infinite;
+          }
+
+          .loading-bar:nth-child(4) {
+            animation: grow var(--uib-speed) ease-in-out infinite;
+          }
+
+          @keyframes grow {
+            0%, 100% {
+              transform: scaleY(0.3);
+            }
+            50% {
+              transform: scaleY(1);
+            }
+          }
+        `
+      }} />
+      <div
+        hidden
+        data-premid-watch-context=""
+        data-premid-title={showTitle || undefined}
+        data-premid-media-type="tv"
+        data-premid-season={seasonNumber}
+        data-premid-episode={episodeNumber}
+        data-premid-episode-title={
+          episodeTitle || currentEpisodeInfo?.name || undefined
+        }
+        data-premid-source-label={embedType || selectedSource || undefined}
+        data-premid-source-detail={preMidSourceDetail}
+      />
+      {isLoading ? (
+        <div className="flex flex-col items-center justify-center h-full bg-black">
+          <div className="loading-container">
+            <div className="loading-bar"></div>
+            <div className="loading-bar"></div>
+            <div className="loading-bar"></div>
+            <div className="loading-bar"></div>
+          </div>
+          <div className="text-white text-xl font-medium mt-6">{vipRetryMessage || loadingText}</div>
+        </div>
+      ) : onlyVostfrAvailable ? (
+        <div className="h-full bg-black text-white flex flex-col items-center justify-center p-4">
+          <div className="max-w-2xl w-full bg-gray-900/80 backdrop-blur-md rounded-xl p-8 text-center shadow-2xl border border-gray-800">
+            <div className="mb-6">
+              <svg xmlns="http://www.w3.org/2000/svg" className="mx-auto h-16 w-16 text-yellow-500 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+              <h2 className="text-2xl font-bold text-white mb-2">{t('watch.contentNotFoundInSources')}</h2>
+              <p className="text-gray-300 mb-6">
+                {t('watch.episodeNotFoundDesc')}
+              </p>
+              <div className="flex justify-center gap-4">
+                <button
+                  onClick={() => navigate(`/tv/${encodeId(id!)}`)}
+                  className="px-6 py-3 bg-gray-800 hover:bg-gray-700 text-white rounded-lg transition-all duration-200 shadow-lg"
+                >
+                  {t('watch.back')}
+                </button>
+                <button
+                  onClick={handleLoadVostfr}
+                  className="px-6 py-3 bg-red-800 hover:bg-red-700 text-white rounded-lg transition-all duration-200 shadow-lg"
+                >
+                  {t('watch.chooseVostfrPlayer')}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Source Selection Menu */}
+          <AnimatePresence>
+            {showEmbedQuality && (
+              <motion.div
+                key="embed-quality-menu"
+                initial={{ opacity: 0, x: 300 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: 300 }}
+                transition={{ duration: 0.3, ease: 'easeOut' }}
+                className="fixed inset-0 z-[10001] bg-black/60 flex justify-end pointer-events-auto"
+              >
+                <div className="bg-black/95 backdrop-blur-lg border-l border-gray-800 shadow-2xl w-full max-w-md h-full overflow-y-auto z-[10002]">
+                  <div className="flex justify-between items-center p-4 border-b border-gray-700/60 sticky top-0 bg-black/95 z-10">
+                    <h3 className="text-white text-lg font-bold">{t('watch.changeSource')}</h3>
+                    <button
+                      onClick={() => setShowEmbedQuality(false)}
+                      className="text-gray-400 hover:text-red-500 transition-colors text-2xl font-bold focus:outline-none"
+                    >
+                      ×
+                    </button>
+                  </div>
+                  <div className="p-4">
+                    <HLSPlayer
+                      src={''}
+                      className="hidden"
+                      movieId={undefined}
+                      tvShowId={id ?? undefined}
+                      seasonNumber={seasonNumber}
+                      episodeNumber={episodeNumber}
+                      controls={false}
+                      nexusHlsSources={nexusHlsSources}
+                      nexusFileSources={nexusFileSources}
+                      darkinoSources={darkinoSources}
+                      mp4Sources={[
+                        ...(sibnetUrl ? [{ url: sibnetUrl, label: "Sibnet (Anime)", language: "VOSTFR" }] : []),
+                        ...mp4Sources
+                      ]}
+                      frembedAvailable={frembedAvailable}
+                      customSources={customSources}
+                      omegaSources={extractOmegaPlayers(omegaData, seasonNumber, episodeNumber)}
+                      coflixSources={coflixData?.player_links || []}
+                      fstreamSources={fstreamSources}
+                      wiflixSources={wiflixSources}
+                      rivestreamSources={isRivestreamAvailable() ? rivestreamSources : []}
+                      rivestreamCaptions={isRivestreamAvailable() ? rivestreamCaptions : []}
+                      loadingRivestream={isRivestreamAvailable() ? loadingRivestream : false}
+                      purstreamSources={purstreamSources}
+                      adFreeM3u8Url={adFreeM3u8Url}
+                      autoPlay={false}
+                      onlyQualityMenu={true}
+                      embedType={selectedSource === 'frembed' ? 'frembed' : (embedType || undefined)}
+                      embedUrl={selectedSource === 'frembed' ? `https://frembed.bond/api/serie.php?id=${id}&sa=${seasonNumber}&epi=${episodeNumber}` : (embedUrl ?? undefined)}
+                    />
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      ) : embedUrl ? ( // Render Embed Iframe
+        <div className="w-full h-full flex flex-col items-center justify-center relative">
+          {/* Back to Info Button */}
+          <button
+            onClick={() => navigate(`/tv/${encodeId(id!)}`)}
+            className="absolute top-4 left-4 z-50 flex items-center gap-2 px-3 py-2 rounded-lg bg-black/70 hover:bg-black/90 text-white shadow-lg transition-all duration-200"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+            </svg>
+            {t('watch.back')}
+          </button>
+
+          {/* Next Episode Button (for embed view in the other embed section) */}
+          {nextEpisodeData && (
+            <div className="absolute top-4 right-4 z-50 flex items-center gap-2">
+              {/* Previous Episode Button - hide if at first episode of first season */}
+              {!(seasonNumber === 1 && episodeNumber === 1) && (
+                <button
+                  onClick={() => {
+                    let targetSeason = seasonNumber;
+                    let targetEpisode = episodeNumber;
+
+                    if (episodeNumber > 1) {
+                      targetEpisode = episodeNumber - 1;
+                    } else if (seasonNumber > 1) {
+                      targetSeason = seasonNumber - 1;
+                      // Trouver le dernier épisode de la saison précédente
+                      const previousSeason = seasons.find(s => s.season_number === targetSeason);
+                      targetEpisode = previousSeason ? previousSeason.episode_count : 1; // Fallback à 1
+                    }
+
+                    // Naviguer seulement si la cible est différente
+                    if (targetSeason !== seasonNumber || targetEpisode !== episodeNumber) {
+                      handleNextEpisodeNav(targetSeason, targetEpisode);
+                    }
+                  }}
+                  className="flex items-center gap-2 px-3 py-2 rounded-lg bg-black/70 hover:bg-black/90 text-white shadow-lg transition-all duration-200"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7" />
+                  </svg>
+                  <span>
+                    {(episodeNumber && episodeNumber > 1) ?
+                      `S${seasonNumber || 1}:${String((episodeNumber || 1) - 1).padStart(2, '0')}` :
+                      (seasonNumber && seasonNumber > 1 ?
+                        `S${(seasonNumber || 1) - 1}:01` :
+                        `S1:01`)}
+                  </span>
+                </button>
+              )}
+
+              {/* Episodes Button */}
+              <button
+                onClick={() => setShowEpisodesMenu(!showEpisodesMenu)}
+                className="flex items-center justify-center w-12 sm:w-auto sm:justify-start gap-1 sm:gap-2 px-2 sm:px-3 py-2 rounded-lg bg-black/70 hover:bg-black/90 text-white shadow-lg transition-all duration-200"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h7" />
+                </svg>
+                <span className="hidden sm:inline">{t('watch.episodes')}</span>
+              </button>
+
+              {/* Only show Next button if nextEpisodeData exists */}
+              {nextEpisodeData && (
+                <button
+                  onClick={() => handleNextEpisodeNav(nextEpisodeData.season_number, nextEpisodeData.episode_number)}
+                  className="flex items-center gap-2 px-3 py-2 rounded-lg bg-black/70 hover:bg-black/90 text-white shadow-lg transition-all duration-200"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" />
+                  </svg>
+                  <span>{`S${nextEpisodeData.season_number}:${String(nextEpisodeData.episode_number).padStart(2, '0')}`}</span>
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Episodes Menu */}
+          <AnimatePresence>
+            {showEpisodesMenu && (
+              <motion.div
+                initial={{ opacity: 0, y: -20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -20 }}
+                transition={{ duration: 0.2 }}
+                className="fixed top-16 right-4 md:right-4 left-4 md:left-auto z-[11000] bg-black/95 backdrop-blur-md border border-gray-800 rounded-lg shadow-2xl md:w-96 w-auto max-h-[80vh] overflow-hidden flex flex-col"
+              >
+                <div className="p-4 border-b border-gray-800 flex justify-between items-center">
+                  <h3 className="text-lg font-semibold text-white">{showTitle}</h3>
+                  <button
+                    onClick={() => setShowEpisodesMenu(false)}
+                    className="text-gray-400 hover:text-white"
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+
+                {/* Saison actuelle (Menu déroulant personnalisé) */}
+                <div className="p-4 border-b border-gray-800/50">
+                  <h4 className="text-sm text-gray-400 mb-2">{t('watch.seasonLabel')}</h4>
+                  <div className="relative w-full">
+                    <button
+                      onClick={() => setShowSeasonDropdown(!showSeasonDropdown)}
+                      className="w-full flex items-center justify-between bg-gray-800/50 hover:bg-gray-700/50 rounded-lg p-3 text-white transition-colors duration-200"
+                    >
+                      <span className="font-medium">{t('watch.seasonN', { n: selectedSeasonNumber })}</span>
+                      <motion.div
+                        animate={{ rotate: showSeasonDropdown ? 180 : 0 }}
+                        transition={{ duration: 0.2 }}
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </motion.div>
+                    </button>
+
+                    {/* Dropdown des saisons animé */}
+                    <AnimatePresence>
+                      {showSeasonDropdown && (
+                        <motion.div
+                          initial={{ opacity: 0, y: -10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: -10 }}
+                          transition={{ duration: 0.2, ease: "easeInOut" }}
+                          className="absolute top-full left-0 right-0 mt-1 bg-gray-900/95 border border-gray-700 rounded-lg shadow-xl max-h-60 overflow-y-auto z-20 backdrop-blur-sm custom-scrollbar"
+                        >
+                          {seasons.map((season) => (
+                            <button
+                              key={season.id}
+                              onClick={() => {
+                                setSelectedSeasonNumber(season.season_number);
+                                setShowSeasonDropdown(false);
+                              }}
+                              className={`w-full text-left px-4 py-3 text-sm transition-colors duration-150 ${selectedSeasonNumber === season.season_number
+                                ? 'bg-red-800/50 text-red-100 font-semibold'
+                                : 'text-gray-200 hover:bg-gray-700/50'
+                                }`}
+                            >
+                              {t('watch.seasonN', { n: season.season_number })}
+                              <span className="text-xs text-gray-400 ml-1">({t('watch.episodesCount', { count: season.episode_count })})</span>
+                            </button>
+                          ))}
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
+                </div>
+
+                {/* Episode actuel */}
+                {currentEpisodeInfo && (
+                  <div className="p-4 border-b border-gray-800/50 flex gap-3">
+                    {currentEpisodeInfo.still_path && (
+                      shouldHide('episodeImages') ? (
+                        <div className="w-24 h-auto rounded object-cover bg-gray-800 flex items-center justify-center min-h-[60px]">
+                          <span className="text-xs text-gray-400">{t('watch.hiddenImage')}</span>
+                        </div>
+                      ) : (
+                        <img
+                          src={`https://image.tmdb.org/t/p/w300${currentEpisodeInfo.still_path}`}
+                          alt={currentEpisodeInfo.name}
+                          className="w-24 h-auto rounded object-cover"
+                        />
+                      )
+                    )}
+                    <div className="flex-1">
+                      <div className="text-xs text-gray-400 mb-1">
+                        S{seasonNumber} E{episodeNumber} · {t('watch.watching')}
+                      </div>
+                      <h4 className="text-white font-medium mb-1">
+                        {shouldHide('episodeNames')
+                          ? getMaskedContent(currentEpisodeInfo.name, 'episodeNames', undefined, episodeNumber)
+                          : `${episodeNumber}. ${currentEpisodeInfo.name}`}
+                      </h4>
+                      <p className="text-xs text-gray-300 line-clamp-3">
+                        {shouldHide('episodeOverviews')
+                          ? getMaskedContent(currentEpisodeInfo.overview || t('watch.noDescriptionAvailable'), 'episodeOverviews', undefined, episodeNumber)
+                          : (currentEpisodeInfo.overview || t('watch.noDescriptionAvailable'))}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Liste des épisodes */}
+                <div className="flex-1 overflow-y-auto p-1">
+                  <div className="grid gap-2 p-2">
+                    {episodes.map((episode) => (
+                      <button
+                        key={episode.id}
+                        onClick={() => {
+                          handleNextEpisodeNav(selectedSeasonNumber, episode.episode_number);
+                          setShowEpisodesMenu(false);
+                        }}
+                        className={`flex items-start gap-3 p-2 rounded-lg transition-colors ${episodeNumber === episode.episode_number && seasonNumber === selectedSeasonNumber
+                          ? 'bg-red-900/30 border border-red-800/50'
+                          : 'hover:bg-gray-800/50'
+                          }`}
+                      >
+                        {episode.still_path ? (
+                          shouldHide('episodeImages') ? (
+                            <div className="w-20 h-12 bg-gray-800 rounded flex items-center justify-center">
+                              <span className="text-xs text-gray-400">{t('watch.hiddenImage')}</span>
+                            </div>
+                          ) : (
+                            <img
+                              src={`https://image.tmdb.org/t/p/w300${episode.still_path}`}
+                              alt={episode.name}
+                              className="w-20 h-12 object-cover rounded"
+                            />
+                          )
+                        ) : (
+                          <div className="w-20 h-12 bg-gray-800 rounded flex items-center justify-center">
+                            <span className="text-sm text-gray-400">No image</span>
+                          </div>
+                        )}
+                        <div className="flex-1 text-left">
+                          <div className="text-xs text-gray-400">{t('watch.episodeN', { n: episode.episode_number })}</div>
+                          <h5 className="text-sm text-white font-medium line-clamp-1">
+                            {shouldHide('episodeNames')
+                              ? getMaskedContent(episode.name, 'episodeNames', undefined, episode.episode_number)
+                              : `${episode.episode_number}. ${episode.name}`}
+                          </h5>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* The Embed Iframe */}
+          <iframe
+            key={`iframe-${embedType || ''}-${embedUrl || ''}`}
+            src={embedUrl || ''}
+            className="w-full h-full border-0"
+            allowFullScreen
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+            sandbox={(() => {
+              const urlLower = embedUrl ? embedUrl.toLowerCase() : '';
+
+              // Jamais de sandbox pour Mixdrop, Doodstream, ou les lecteurs multi (emmmmbed.com, lecteur6.com)
+              if (urlLower.includes("mixdrop") || urlLower.includes("dood") || urlLower.includes("emmmmbed") || urlLower.includes("lecteur6")) {
+                return undefined;
+              }
+
+              // Jamais de sandbox pour supervideo ou dropload
+              if (urlLower.includes("supervideo") || urlLower.includes("dropload")) {
+                return undefined;
+              }
+
+              // Jamais de sandbox pour les liens Firebase Upload
+              if (urlLower.includes('uqload') || urlLower.includes('luluvdoo')) {
+                return undefined;
+              }
+
+              // Pour omega : jamais de sandbox si mixdrop ou dood (déjà vérifié ci-dessus)
+              if (embedType === 'omega') {
+                if (urlLower.includes('mixdrop') || urlLower.includes('dood')) {
+                  return undefined;
+                }
+                return "allow-scripts allow-same-origin allow-presentation";
+              }
+              // Pour coflix : jamais de sandbox pour les lecteurs multi
+              if (embedType === 'coflix') {
+                return undefined;
+              }
+              return undefined;
+            })()}
+          ></iframe>
+
+          {/* Source Selection Menu */}
+          <AnimatePresence>
+            {showEmbedQuality && (
+              <motion.div
+                key="embed-quality-menu"
+                initial={{ opacity: 0, x: 300 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: 300 }}
+                transition={{ duration: 0.3, ease: 'easeOut' }}
+                className="fixed inset-0 z-[10001] bg-black/60 flex justify-end pointer-events-auto"
+              >
+                <div className="bg-black/95 backdrop-blur-lg border-l border-gray-800 shadow-2xl w-full max-w-md h-full overflow-y-auto z-[10002]">
+                  <div className="flex justify-between items-center p-4 border-b border-gray-700/60 sticky top-0 bg-black/95 z-10">
+                    <h3 className="text-white text-lg font-bold">{t('watch.changeSource')}</h3>
+                    <button
+                      onClick={() => setShowEmbedQuality(false)}
+                      className="text-gray-400 hover:text-red-500 transition-colors text-2xl font-bold focus:outline-none"
+                    >
+                      ×
+                    </button>
+                  </div>
+                  <div className="p-4">
+                    <HLSPlayer
+                      src={''}
+                      className="hidden"
+                      movieId={undefined}
+                      tvShowId={id ?? undefined}
+                      seasonNumber={seasonNumber}
+                      episodeNumber={episodeNumber}
+                      controls={false}
+                      nexusHlsSources={nexusHlsSources}
+                      nexusFileSources={nexusFileSources}
+                      darkinoSources={darkinoSources}
+                      mp4Sources={[
+                        ...(sibnetUrl ? [{ url: sibnetUrl, label: "Sibnet (Anime)", language: "VOSTFR" }] : []),
+                        ...mp4Sources
+                      ]}
+                      frembedAvailable={frembedAvailable}
+                      customSources={customSources}
+                      omegaSources={extractOmegaPlayers(omegaData, seasonNumber, episodeNumber)}
+                      coflixSources={coflixData?.player_links || []}
+                      fstreamSources={fstreamSources}
+                      wiflixSources={wiflixSources}
+                      viperSources={viperSources}
+
+                      voxSources={voxSources}
+                      rivestreamSources={isRivestreamAvailable() ? rivestreamSources : []}
+                      rivestreamCaptions={isRivestreamAvailable() ? rivestreamCaptions : []}
+                      loadingRivestream={isRivestreamAvailable() ? loadingRivestream : false}
+                      purstreamSources={purstreamSources}
+                      adFreeM3u8Url={adFreeM3u8Url}
+                      autoPlay={false}
+                      onlyQualityMenu={true}
+                      embedType={selectedSource === 'frembed' ? 'frembed' : (embedType || undefined)}
+                      embedUrl={selectedSource === 'frembed' ? `https://frembed.bond/api/serie.php?id=${id}&sa=${seasonNumber}&epi=${episodeNumber}` : (embedUrl ?? undefined)}
+                    />
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      ) : (hlsSrc && hlsSrc.trim() !== '' || loadingRivestream) && (!adPopupTriggered || shouldLoadIframe || hasClickedAd) ? ( // Only render HLS Player if hlsSrc is valid OR if loading Rivestream sources
+        <div className="w-full h-full flex items-center justify-center">
+          <HLSPlayer
+            key={`${selectedSource}-${selectedMp4Source}-${hlsSrc}-${videoSource}`} // Updated key to include videoSource
+            src={hlsSrc}
+            poster={showPosterPath ? `https://image.tmdb.org/t/p/w500${showPosterPath}` : undefined}
+            backdrop={backdropPath ? `https://image.tmdb.org/t/p/w1280${backdropPath}` : undefined}
+            className="w-full h-full"
+            autoPlay={true}
+            // Basic onError handler for HLS - could try next MP4/Darkino if needed
+            onError={handleHlsError}
+            // Map properties for the nextEpisode prop
+            nextEpisode={hlsNextEpisodeProp}
+            onNextEpisode={handleNextEpisodeNav}
+            onPreviousEpisode={handlePreviousEpisodeNavCallback}
+            tvShowId={id ?? undefined}
+            seasonNumber={seasonNumber}
+            episodeNumber={episodeNumber}
+            controls={true}
+            // Pass all available sources for the menu inside HLSPlayer
+            nexusHlsSources={nexusHlsSources}
+            nexusFileSources={nexusFileSources}
+            darkinoSources={darkinoSources}
+            mp4Sources={[
+              ...(sibnetUrl ? [{ url: sibnetUrl, label: "Sibnet (Anime)", language: "VOSTFR" }] : []),
+              ...mp4Sources
+            ]}
+            frembedAvailable={frembedAvailable}
+            customSources={customSources}
+            omegaSources={extractOmegaPlayers(omegaData, seasonNumber, episodeNumber)}
+            coflixSources={coflixData?.player_links || []}
+            fstreamSources={fstreamSources}
+            wiflixSources={wiflixSources}
+            viperSources={viperSources}
+
+            voxSources={voxSources}
+            rivestreamSources={isRivestreamAvailable() ? rivestreamSources : []}
+            rivestreamCaptions={isRivestreamAvailable() ? rivestreamCaptions : []}
+            loadingRivestream={isRivestreamAvailable() ? loadingRivestream : false}
+            purstreamSources={purstreamSources}
+            adFreeM3u8Url={adFreeM3u8Url}
+            // Pass TV show context for UI/progress saving
+            tvShow={hlsTvShowProp}
+            initialTime={watchProgress} // Add initialTime prop
+            // Pass episodes data for internal episodes menu
+            episodes={episodes}
+            seasons={seasons}
+            showTitle={showTitle}
+            currentEpisodeInfo={currentEpisodeInfo}
+            onEpisodeSelect={handleNextEpisodeNav}
+          />
+
+
+
+          {/* Source Selection Menu */}
+          <AnimatePresence>
+            {showEmbedQuality && (
+              <motion.div
+                key="embed-quality-menu"
+                initial={{ opacity: 0, x: 300 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: 300 }}
+                transition={{ duration: 0.3, ease: 'easeOut' }}
+                className="fixed inset-0 z-[10001] bg-black/60 flex justify-end pointer-events-auto"
+              >
+                <div className="bg-black/95 backdrop-blur-lg border-l border-gray-800 shadow-2xl w-full max-w-md h-full overflow-y-auto z-[10002]">
+                  <div className="flex justify-between items-center p-4 border-b border-gray-700/60 sticky top-0 bg-black/95 z-10">
+                    <h3 className="text-white text-lg font-bold">{t('watch.changeSource')}</h3>
+                    <button
+                      onClick={() => setShowEmbedQuality(false)}
+                      className="text-gray-400 hover:text-red-500 transition-colors text-2xl font-bold focus:outline-none"
+                    >
+                      ×
+                    </button>
+                  </div>
+                  <div className="p-4">
+                    <HLSPlayer
+                      src={''}
+                      className="hidden"
+                      movieId={undefined}
+                      tvShowId={id ?? undefined}
+                      seasonNumber={seasonNumber}
+                      episodeNumber={episodeNumber}
+                      controls={false}
+                      darkinoSources={darkinoSources}
+                      mp4Sources={[
+                        ...(sibnetUrl ? [{ url: sibnetUrl, label: "Sibnet (Anime)", language: "VOSTFR" }] : []),
+                        ...mp4Sources
+                      ]}
+                      frembedAvailable={frembedAvailable}
+                      customSources={customSources}
+                      omegaSources={extractOmegaPlayers(omegaData, seasonNumber, episodeNumber)}
+                      coflixSources={coflixData?.player_links || []}
+                      fstreamSources={fstreamSources}
+                      wiflixSources={wiflixSources}
+                      viperSources={viperSources}
+
+                      voxSources={voxSources}
+                      rivestreamSources={isRivestreamAvailable() ? rivestreamSources : []}
+                      rivestreamCaptions={isRivestreamAvailable() ? rivestreamCaptions : []}
+                      loadingRivestream={isRivestreamAvailable() ? loadingRivestream : false}
+                      purstreamSources={purstreamSources}
+                      adFreeM3u8Url={adFreeM3u8Url}
+                      autoPlay={false}
+                      onlyQualityMenu={true}
+                      embedType={selectedSource === 'frembed' ? 'frembed' : (embedType || undefined)}
+                      embedUrl={selectedSource === 'frembed' ? `https://frembed.bond/api/serie.php?id=${id}&sa=${seasonNumber}&epi=${episodeNumber}` : (embedUrl ?? undefined)}
+                    />
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      ) : (
+        <div className="w-full h-full flex flex-col items-center justify-center relative bg-black">
+          <HLSPlayer
+            src={''}
+            className="hidden"
+            movieId={undefined}
+            tvShowId={id ?? undefined}
+            seasonNumber={seasonNumber}
+            episodeNumber={episodeNumber}
+            controls={false}
+            nexusHlsSources={nexusHlsSources}
+            nexusFileSources={nexusFileSources}
+            darkinoSources={darkinoSources}
+            mp4Sources={[
+              ...(sibnetUrl ? [{ url: sibnetUrl, label: "Sibnet (Anime)", language: "VOSTFR" }] : []),
+              ...mp4Sources
+            ]}
+            frembedAvailable={frembedAvailable}
+            customSources={customSources}
+            omegaSources={extractOmegaPlayers(omegaData, seasonNumber, episodeNumber)}
+            coflixSources={coflixData?.player_links || []}
+            fstreamSources={fstreamSources}
+            wiflixSources={wiflixSources}
+            viperSources={viperSources}
+
+            rivestreamSources={isRivestreamAvailable() ? rivestreamSources : []}
+            rivestreamCaptions={isRivestreamAvailable() ? rivestreamCaptions : []}
+            loadingRivestream={isRivestreamAvailable() ? loadingRivestream : false}
+            purstreamSources={purstreamSources}
+            adFreeM3u8Url={adFreeM3u8Url}
+            autoPlay={false}
+            onlyQualityMenu={true}
+            embedType={selectedSource === 'frembed' ? 'frembed' : (embedType || undefined)}
+            embedUrl={selectedSource === 'frembed' ? `https://frembed.bond/api/serie.php?id=${id}&sa=${seasonNumber}&epi=${episodeNumber}` : (embedUrl ?? undefined)}
+          />
+        </div>
+      )}
+
+      {showSourceButton && (
+        <div className="absolute top-16 right-4 z-[9000] flex items-center gap-2">
+          {/* Bouton Ouvrir dans une nouvelle page */}
+          <button
+            onClick={() => {
+              const targetUrl = embedType === 'vostfr'
+                ? `https://vidlink.pro/tv/${id}/${seasonNumber}/${episodeNumber}`
+                : embedUrl || '';
+              window.open(targetUrl, '_blank', 'noopener,noreferrer');
+            }}
+            className="flex items-center gap-1 sm:gap-2 px-3 py-2 rounded-lg bg-gray-800/90 backdrop-blur-sm border border-gray-600 hover:bg-gray-700/90 text-white font-medium text-sm transition-all duration-200"
+            title={t('watch.openInNewPage')}
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+            </svg>
+          </button>
+
+          {/* Bouton Changer de source */}
+          <button
+            onClick={() => setShowEmbedQuality(true)}
+            className="flex items-center gap-1 sm:gap-2 px-3 py-2 rounded-lg bg-black/70 hover:bg-black/90 text-white shadow-lg transition-all duration-200"
+          >
+            <svg className="w-4 h-4 text-red-500" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" /></svg>
+            <span className="hidden sm:inline">{t('watch.sources')}</span>
+          </button>
+        </div>
+      )}
+
+    </div>
+  );
+};
+
+export default WatchTv;

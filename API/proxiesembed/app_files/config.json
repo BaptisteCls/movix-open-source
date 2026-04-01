@@ -1,0 +1,102 @@
+{
+    "CDM_WVD_FILE_PATH": "gift_from_karoolus.wvd",
+    "USER_AGENT": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36 Edg/123.0.0.0",
+    "NUMBER_OF_THREADS": {
+        "DATA_SCRAPER": 5,
+        "MEDIA_DOWNLOADER": 3
+    },
+    "DOWNLOAD_COMMANDS": {
+        "OUTPUT_MEDIA_PATH": "media",
+        "WAIT_BEFORE_DOWNLOADING": true,
+        "ADDITIONAL_SUBS": true,
+        "TOOL_PARAMETERS": {
+            "VOD": "-sv best -sa best -da id=audio_div -ss all -mt --check-segments-count false --no-log",
+            "LIVESTREAM": "--live-pipe-mux --live-record-limit 00:02:00"
+        }
+    },
+    "SERVICE_CREDENTIALS": {
+        "app.nzrplus.com": {
+            "EMAIL": "YOUR_EMAIL",
+            "PASSWORD": "YOUR_PASSWORD"
+        },
+        "auvio.rtbf.be": {
+            "EMAIL": "YOUR_EMAIL",
+            "PASSWORD": "YOUR_PASSWORD"
+        },
+        "cineverse.com": {
+            "OPTIONAL": true,
+            "FIREFOX_COOKIES": true
+        },
+        "eurovisionsport.com": {
+            "EMAIL": "YOUR_EMAIL",
+            "PASSWORD": "YOUR_PASSWORD"
+        },
+        "joyn.de": {
+            "OPTIONAL": true,
+            "EMAIL": "",
+            "PASSWORD": "YOUR_PASSWORD (leave at least one login field empty if you don't want to use an account)",
+            "PIN": "YOUR_PIN (this field is ignored if it's not a 4 digit text or if you don't use an account)"
+        },
+        "kanopy.com": {
+            "FIREFOX_COOKIES": true
+        },
+        "m6.fr": {
+            "EMAIL": "YOUR_EMAIL",
+            "PASSWORD": "YOUR_PASSWORD"
+        },
+        "midnightpulp.com": {
+            "OPTIONAL": true,
+            "FIREFOX_COOKIES": true
+        },
+        "mtv.fi": {
+            "FIREFOX_COOKIES": true
+        },
+        "nba.com": {
+            "OPTIONAL": true,
+            "FIREFOX_COOKIES": true
+        },
+        "npo.nl": {
+            "OPTIONAL": true,
+            "FIREFOX_COOKIES": true
+        },
+        "plus.rtl.de": {
+            "OPTIONAL": true,
+            "EMAIL": "",
+            "PASSWORD": "YOUR_PASSWORD (leave at least one field empty if you don't want to use an account)"
+        },
+        "ptvflix.org": {
+            "EMAIL": "YOUR_EMAIL",
+            "PASSWORD": "YOUR_PASSWORD"
+        },
+        "rmcbfmplay.com": {
+            "EMAIL": "YOUR_EMAIL",
+            "PASSWORD": "YOUR_PASSWORD"
+        },
+        "rtlplay.be": {
+            "FIREFOX_COOKIES": true
+        },
+        "rugbypass.tv": {
+            "EMAIL": "YOUR_EMAIL",
+            "PASSWORD": "YOUR_PASSWORD"
+        },
+        "tf1.fr": {
+            "EMAIL": "YOUR_EMAIL",
+            "PASSWORD": "YOUR_PASSWORD"
+        },
+        "uefa.tv": {
+            "FIREFOX_COOKIES": true
+        },
+        "viki.com": {
+            "OPTIONAL": true,
+            "FIREFOX_COOKIES": true
+        },
+        "vtmgo.be": {
+            "FIREFOX_COOKIES": true
+        },
+        "watch.shortly.film": {
+            "EMAIL": "YOUR_EMAIL",
+            "PASSWORD": "YOUR_PASSWORD"
+        }
+    },
+    "WARN_EXTERNAL_TOOLS": true
+}

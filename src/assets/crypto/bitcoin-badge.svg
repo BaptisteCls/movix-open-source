@@ -1,0 +1,23 @@
+<svg width="96" height="96" viewBox="0 0 96 96" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="bitcoin-bg" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(35 28) rotate(52.6) scale(66.4845)">
+      <stop stop-color="#FFE6A3"/>
+      <stop offset="0.48" stop-color="#F59E0B"/>
+      <stop offset="1" stop-color="#5A2D03"/>
+    </radialGradient>
+    <linearGradient id="bitcoin-ring" x1="18" y1="16" x2="76" y2="82" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFF5D6" stop-opacity="0.95"/>
+      <stop offset="1" stop-color="#FDE68A" stop-opacity="0.18"/>
+    </linearGradient>
+  </defs>
+  <circle cx="48" cy="48" r="38" fill="#070707"/>
+  <circle cx="48" cy="48" r="34" fill="url(#bitcoin-bg)"/>
+  <circle cx="48" cy="48" r="33.25" stroke="url(#bitcoin-ring)" stroke-width="1.5"/>
+  <circle cx="39" cy="31" r="15" fill="#FFF5D6" opacity="0.12"/>
+  <path d="M44 22V74" stroke="#FFF8EA" stroke-width="3" stroke-linecap="round"/>
+  <path d="M51 22V74" stroke="#FFF8EA" stroke-width="3" stroke-linecap="round"/>
+  <path d="M35 30H54C61.1797 30 65 33.4624 65 39C65 44.5376 61.1797 48 54 48H35V30Z" fill="#FFF8EA"/>
+  <path d="M35 48H56C63.7319 48 68 52.0294 68 58.5C68 64.9706 63.7319 69 56 69H35V48Z" fill="#FFF8EA"/>
+  <path d="M35 30V69" stroke="#FFF8EA" stroke-width="4" stroke-linecap="round"/>
+  <path d="M34 74C39.7244 78.3513 46.7874 80.5231 54.6667 79.6667" stroke="#FFF8EA" stroke-opacity="0.2" stroke-width="2" stroke-linecap="round"/>
+</svg>

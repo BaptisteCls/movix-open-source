@@ -1,0 +1,921 @@
+/**
+ * High-level axios request helpers for each streaming site.
+ * Extracted from server.js — wraps proxy logic with site-specific headers and cookies.
+ *
+ * Some helpers depend on axios instances / session state that live in route modules
+ * (e.g. axiosFStream, axiosAnimeSama, axiosCoflix, cookieJar).
+ * Call `configure(deps)` once at startup to inject those dependencies.
+ */
+
+const axios = require('axios');
+const fsp = require('fs').promises;
+const path = require('path');
+const writeFileAtomic = require('write-file-atomic');
+
+const {
+  ENABLE_DARKINO_PROXY,
+  ENABLE_COFLIX_PROXY,
+  ENABLE_FRENCH_STREAM_PROXY,
+  ENABLE_LECTEURVIDEO_PROXY,
+  ENABLE_FSTREAM_PROXY,
+  ENABLE_ANIME_PROXY,
+  ENABLE_WIFLIX_PROXY,
+  DARKINO_403_COOLDOWN_MS,
+  DARKINO_PROXIES,
+  PROXIES,
+  HTTP_PROXIES,
+  CLOUDFLARE_WORKERS_PROXIES,
+  getProxyAgent,
+  getDarkinoHttpProxyAgent,
+  getAvailableProxies,
+  markProxyAsErrored,
+  markProxyAsHealthy,
+  buildProxiedUrl,
+  makeRequestWithCorsFallback,
+  makeCoflixRequest,
+  makeLecteurVideoRequest
+} = require('./proxyManager');
+
+// Lazy-bound dependencies injected via configure()
+let deps = {
+  darkiHeaders: {},
+  coflixHeaders: {},
+  cookieJar: null,
+  axiosCoflix: null,
+  axiosAnimeSama: null,
+  axiosFStream: null,
+  COFLIX_BASE_URL: '',
+  ANIME_SAMA_URL: '',
+  FSTREAM_BASE_URL: '',
+  ensureFStreamSession: async () => {},
+  fstreamCookies: {},
+  fstreamRequestCounter: 0,
+  getFstreamRequestCounter: () => 0,
+  incrementFstreamRequestCounter: () => {}
+};
+
+const WIFLIX_BASE_URL = 'https://flemmix.golf';
+
+const truncateForLog = (value, maxLength = 300) => {
+  if (typeof value !== 'string') return value;
+  return value.length > maxLength ? `${value.slice(0, maxLength)}...` : value;
+};
+
+const summarizeRequestErrorForLog = (error) => {
+  const responseBody = error?.response?.data;
+  return {
+    message: error?.message,
+    code: error?.code,
+    status: error?.response?.status,
+    statusText: error?.response?.statusText,
+    responseSnippet: typeof responseBody === 'string'
+      ? truncateForLog(responseBody, 500)
+      : responseBody && typeof responseBody === 'object'
+        ? truncateForLog(JSON.stringify(responseBody), 500)
+        : undefined
+  };
+};
+
+const BYPASS403_SERVER_URL = String(process.env.BYPASS403_SERVER_URL || '')
+  .trim()
+  .replace(/\/+$/, '');
+
+function buildBypass403RequestUrl(targetUrl) {
+  if (!BYPASS403_SERVER_URL) {
+    return targetUrl;
+  }
+
+  return `${BYPASS403_SERVER_URL}/proxy/${targetUrl}`;
+}
+
+/**
+ * Inject site-specific dependencies that live outside this module.
+ * Call once at server startup after creating axios instances.
+ *
+ * @param {object} injected - Map of dependency names to values
+ */
+function configure(injected) {
+  Object.assign(deps, injected);
+}
+
+// === Proxy manager re-exports for convenience (used by axiosDarkinoRequest) ===
+// We need mutable access to darkino403CooldownUntil via the proxyManager module
+const proxyManager = require('./proxyManager');
+
+// Fonction utilitaire pour g\u00e9n\u00e9rer le referer dynamiquement
+function generateDarkiReferer(url) {
+  const baseUrl = 'https://darkiworld2026.com';
+
+  if (url.includes('/season/') && url.includes('/episode/') && url.includes('/download')) {
+    // Pour les \u00e9pisodes de s\u00e9ries: /titles/{titleId}/season/{seasonId}/episode/{episodeId}/download
+    const match = url.match(/\/titles\/(\d+)\/season\/(\d+)\/episode\/(\d+)\/download/);
+    if (match) {
+      const [, titleId, seasonId, episodeId] = match;
+      return `${baseUrl}/titles/${titleId}/season/${seasonId}/episode/${episodeId}/download?filters=W3sia2V5IjoiaWRfaG9zdCIsInZhbHVlIjoyLCJpc0luYWN0aXZlIjpmYWxzZSwidmFsdWVLZXkiOjJ9XQ%3D%3D`;
+    }
+  } else if (url.includes('/titles/') && url.includes('/download')) {
+    // Pour les films: /titles/{id}/download
+    const match = url.match(/\/titles\/(\d+)\/download/);
+    if (match) {
+      const [, titleId] = match;
+      return `${baseUrl}/titles/${titleId}/download`;
+    }
+  } else if (url.includes('/search/')) {
+    // Pour la recherche
+    return `${baseUrl}/search`;
+  }
+
+  // Par d\u00e9faut, utiliser l'URL de base
+  return baseUrl;
+}
+
+// Fonction utilitaire pour requ\u00eates Darkino avec proxies (SOCKS5h)
+async function axiosDarkinoRequest(config) {
+  // V\u00e9rifier si on est en cooldown apr\u00e8s une erreur 403
+  if (Date.now() < proxyManager.darkino403CooldownUntil) {
+    const remainingMs = proxyManager.darkino403CooldownUntil - Date.now();
+    const remainingMin = Math.ceil(remainingMs / 60000);
+    const error = new Error(`Darkino en cooldown (403 Cloudflare). R\u00e9essayez dans ${remainingMin} minute(s).`);
+    error.isDarkinoCooldown = true;
+    error.response = { status: 403 };
+    throw error;
+  }
+
+  const requestUrl = `https://darkiworld2026.com${config.url}`;
+
+  // G\u00e9n\u00e9rer le referer dynamiquement selon l'URL
+  const dynamicReferer = generateDarkiReferer(config.url);
+
+  // Headers pour les requ\u00eates Darkino
+  const darkinoRequestHeaders = {
+    ...deps.darkiHeaders,
+    'referer': dynamicReferer,
+    ...config.headers,
+  };
+
+  if (!ENABLE_DARKINO_PROXY) {
+    // Si le proxy est d\u00e9sactiv\u00e9, faire la requ\u00eate directe
+    try {
+      const response = await axios({
+        ...config,
+        url: requestUrl,
+        headers: darkinoRequestHeaders,
+        timeout: 5000,
+        withCredentials: false,
+        decompress: true
+      });
+
+      const setCookieHeader = response.headers['set-cookie'];
+      if (setCookieHeader && deps.cookieJar) {
+        await Promise.all(setCookieHeader.map(cookie => deps.cookieJar.setCookie(cookie, 'https://darkiworld2026.com')));
+      }
+      return response;
+    } catch (error) {
+      console.error(`[DARKINO REQUEST][DIRECT ERROR] ${String(config.method || 'get').toUpperCase()} ${config.url}`, summarizeRequestErrorForLog(error));
+      if (error.response && error.response.headers['set-cookie'] && deps.cookieJar) {
+        const setCookieHeader = error.response.headers['set-cookie'];
+        await Promise.all(setCookieHeader.map(cookie => deps.cookieJar.setCookie(cookie, 'https://darkiworld2026.com')));
+      }
+      // En cas d'erreur 403, activer le cooldown
+      if (error.response?.status === 403) {
+        proxyManager.darkino403CooldownUntil = Date.now() + DARKINO_403_COOLDOWN_MS;
+        console.log(`[DARKINO] Erreur 403 d\u00e9tect\u00e9e (direct) - Cooldown activ\u00e9 pour 5 minutes`);
+      }
+      throw error;
+    }
+  }
+
+  // Utiliser les proxies HTTP sp\u00e9cifiques de Darkino avec rotation al\u00e9atoire
+  const darkinoProxies = [...DARKINO_PROXIES]; // Copie pour pouvoir m\u00e9langer
+
+  // M\u00e9langer al\u00e9atoirement les proxies
+  for (let i = darkinoProxies.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [darkinoProxies[i], darkinoProxies[j]] = [darkinoProxies[j], darkinoProxies[i]];
+  }
+
+  let lastError = null;
+  const maxRetries = 1; // Une seule tentative
+
+  for (let i = 0; i < maxRetries; i++) {
+    const proxy = darkinoProxies[i];
+    const agents = getDarkinoHttpProxyAgent(proxy);
+
+    try {
+      const response = await axios({
+        ...config,
+        method: config.method || 'get',
+        url: requestUrl,
+        headers: darkinoRequestHeaders,
+        timeout: 5000,
+        withCredentials: false,
+        decompress: true,
+        httpAgent: agents.httpAgent,
+        httpsAgent: agents.httpsAgent,
+        proxy: false
+      });
+
+      // Mettre \u00e0 jour le cookieJar avec la r\u00e9ponse
+      const setCookieHeader = response.headers['set-cookie'];
+      if (setCookieHeader && deps.cookieJar) {
+        await Promise.all(setCookieHeader.map(cookie => deps.cookieJar.setCookie(cookie, 'https://darkiworld2026.com')));
+      }
+      return response;
+    } catch (error) {
+      lastError = error;
+      const statusCode = error.response?.status;
+      console.warn(`[DARKINO REQUEST][PROXY ERROR] ${String(config.method || 'get').toUpperCase()} ${config.url}`, {
+        attempt: i + 1,
+        status: statusCode,
+        error: summarizeRequestErrorForLog(error)
+      });
+
+      // Mettre \u00e0 jour les cookies m\u00eame en cas d'erreur si le header est pr\u00e9sent
+      if (error.response && error.response.headers['set-cookie'] && deps.cookieJar) {
+        const setCookieHeader = error.response.headers['set-cookie'];
+        await Promise.all(setCookieHeader.map(cookie => deps.cookieJar.setCookie(cookie, 'https://darkiworld2026.com')));
+      }
+
+      // En cas d'erreur 429 (Too Many Requests), essayer avec le prochain proxy si disponible
+      if (statusCode === 429) {
+        continue;
+      }
+
+      // En cas d'erreur 403 (Cloudflare challenge), activer le cooldown de 5 minutes
+      if (statusCode === 403) {
+        proxyManager.darkino403CooldownUntil = Date.now() + DARKINO_403_COOLDOWN_MS;
+        throw error;
+      }
+
+      // Pour les autres erreurs (400, 500, etc.), arr\u00eater imm\u00e9diatement
+      if (statusCode && statusCode !== 429) {
+        throw error;
+      }
+    }
+  }
+
+  // Si on arrive ici, tous les proxies ont \u00e9chou\u00e9
+  console.error(`[DARKINO REQUEST][ALL FAILED] ${String(config.method || 'get').toUpperCase()} ${config.url}`, summarizeRequestErrorForLog(lastError));
+  throw lastError || new Error('Tous les proxies Darkino ont \u00e9chou\u00e9');
+}
+
+// Fonction utilitaire pour requ\u00eates Coflix avec rotation Cloudflare Workers
+async function axiosCoflixRequest(config) {
+  // Si URL relative, on consid\u00e8re que c'est Coflix.
+  const targetUrl = config.url || '';
+  const isAbsolute = /^https?:\/\//i.test(targetUrl);
+  const isCoflixDomain = isAbsolute ? /^https?:\/\/(?:www\.)?coflix\.[^/]+/i.test(targetUrl) : true;
+
+  try {
+    if (!ENABLE_COFLIX_PROXY || !isCoflixDomain) {
+      return await deps.axiosCoflix({ ...config });
+    }
+
+    // Utiliser makeCoflixRequest avec rotation SOCKS5
+    const absoluteUrl = isAbsolute
+      ? targetUrl
+      : `${deps.COFLIX_BASE_URL}${targetUrl.startsWith('/') ? '' : '/'}${targetUrl}`;
+
+    return await makeCoflixRequest(absoluteUrl, {
+      headers: { ...deps.coflixHeaders, ...(config.headers || {}) },
+      timeout: config.timeout || 7000,
+      decompress: true,
+      responseType: config.responseType
+    });
+  } catch (error) {
+    // Logger les erreurs 403
+    if (error.response?.status === 403) {
+      console.log(`[Coflix] Erreur 403 Forbidden dans axiosCoflixRequest`);
+      console.log(`[Coflix] URL: ${targetUrl}`);
+      if (error.coflixProxy) {
+        console.log(`[Coflix] Cloudflare Worker: ${error.coflixProxy}`);
+      }
+      if (error.coflixProxiedUrl) {
+        console.log(`[Coflix] Proxied URL: ${error.coflixProxiedUrl}`);
+      }
+    }
+    throw error;
+  }
+}
+
+// Fonction utilitaire pour requ\u00eates French-Stream (SPA) via CORS fallback
+async function axiosFrenchStreamRequest(config) {
+  const targetUrl = config.url || '';
+  const isAbsolute = /^https?:\/\//i.test(targetUrl);
+  const baseMatches = config.baseURL && /french-?stream/i.test(config.baseURL);
+  const isFrenchStream = /french-?stream/i.test(targetUrl) || baseMatches;
+
+  if (!ENABLE_FRENCH_STREAM_PROXY || !isFrenchStream) {
+    return axios({ timeout: 15000, ...config });
+  }
+
+  const absoluteUrl = isAbsolute
+    ? targetUrl
+    : (config.baseURL ? `${config.baseURL.replace(/\/$/, '')}/${targetUrl.replace(/^\//, '')}` : targetUrl);
+
+  return makeRequestWithCorsFallback(absoluteUrl, {
+    headers: { ...(config.headers || {}) },
+    timeout: config.timeout || 5000,
+    decompress: true,
+    responseType: config.responseType
+  });
+}
+
+// Fonction utilitaire pour requ\u00eates LecteurVideo avec proxies Wiflix
+async function axiosLecteurVideoRequest(config) {
+  const urlStr = config.url || '';
+  const isLecteur = /lecteurvideo|lecteur-video|lecteur/i.test(urlStr) || (config.baseURL && /lecteurvideo|lecteur-video|lecteur/i.test(config.baseURL));
+
+  if (!ENABLE_LECTEURVIDEO_PROXY || !isLecteur) {
+    return axios({ timeout: 15000, ...config });
+  }
+
+  try {
+    // Construire l'URL absolue si n\u00e9cessaire
+    let absoluteUrl = config.url;
+    if (config.baseURL && !config.url.startsWith('http')) {
+      // Nettoyer les URLs avant la concat\u00e9nation pour \u00e9viter les espaces
+      const cleanBaseURL = config.baseURL.trim();
+      const cleanUrl = config.url.trim();
+      absoluteUrl = cleanBaseURL + cleanUrl;
+    }
+
+    // Utiliser makeLecteurVideoRequest avec les proxies Wiflix
+    return await makeLecteurVideoRequest(absoluteUrl, {
+      timeout: config.timeout || 5000,
+      headers: config.headers,
+      decompress: config.decompress !== false,
+      responseType: config.responseType,
+      responseEncoding: config.responseEncoding
+    });
+  } catch (error) {
+    throw error;
+  }
+}
+
+// Fonction utilitaire pour requ\u00eates FStream avec proxy (retry sur 429, pool SOCKS5 + Darkino)
+async function axiosFStreamRequest(config) {
+  const urlStr = config.url || '';
+  const fstreamBaseUrl = deps.FSTREAM_BASE_URL || '';
+  const isFStream = urlStr.includes(fstreamBaseUrl.replace('https://', '').replace('http://', '')) ||
+    (config.baseURL && config.baseURL.includes(fstreamBaseUrl.replace('https://', '').replace('http://', '')));
+
+  if (!ENABLE_FSTREAM_PROXY || !isFStream) {
+    await deps.ensureFStreamSession();
+    const existingHeaders = config.headers || {};
+    const cookieHeader = Object.entries(deps.fstreamCookies)
+      .filter(([, v]) => v !== '' && v != null)
+      .map(([k, v]) => `${k}=${v}`)
+      .join('; ');
+    const response = await deps.axiosFStream({
+      ...config,
+      timeout: 8000,
+      headers: {
+        ...existingHeaders,
+        'Cookie': existingHeaders['Cookie'] || cookieHeader
+      }
+    });
+    deps.incrementFstreamRequestCounter();
+    return response;
+  }
+
+  // Pool combine SOCKS5 + Darkino HTTP, 1 proxy aleatoire
+  const allProxies = [];
+  if (PROXIES && PROXIES.length > 0) {
+    PROXIES.forEach(p => allProxies.push({ proxy: p, type: 'socks5' }));
+  }
+  if (DARKINO_PROXIES && DARKINO_PROXIES.length > 0) {
+    DARKINO_PROXIES.forEach(p => allProxies.push({ proxy: p, type: 'darkino' }));
+  }
+  const entry = allProxies[Math.floor(Math.random() * allProxies.length)];
+  const proxyLabel = `${entry.type}:${entry.proxy.host}:${entry.proxy.port}`;
+
+  try {
+    let agents;
+    if (entry.type === 'socks5') {
+      const agent = getProxyAgent(entry.proxy);
+      agents = { httpAgent: agent, httpsAgent: agent };
+    } else {
+      agents = getDarkinoHttpProxyAgent(entry.proxy);
+    }
+
+    await deps.ensureFStreamSession();
+    const existingHeaders = config.headers || {};
+    const cookieHeader = Object.entries(deps.fstreamCookies)
+      .filter(([, v]) => v !== '' && v != null)
+      .map(([k, v]) => `${k}=${v}`)
+      .join('; ');
+    const response = await deps.axiosFStream({
+      ...config,
+      timeout: 8000,
+      decompress: true,
+      httpAgent: agents.httpAgent,
+      httpsAgent: agents.httpsAgent,
+      proxy: false,
+      headers: {
+        ...existingHeaders,
+        'Cookie': existingHeaders['Cookie'] || cookieHeader
+      }
+    });
+    deps.incrementFstreamRequestCounter();
+    return response;
+  } catch (error) {
+    const status = error.response?.status;
+    console.error(`[FSTREAM REQUEST] Erreur ${status || error.code || 'unknown'} avec proxy ${proxyLabel}: ${error.message}`);
+    throw error;
+  }
+}
+
+// Fonction utilitaire pour requ\u00eates AnimeSama via BYPASS403 + ProxyScrape
+async function axiosAnimeSamaRequest(config) {
+  const MAX_ANIMESAMA_PROXY_ATTEMPTS = 2;
+  let urlStr = config.url || '';
+
+  const isAnimeSama = urlStr.includes('anime-sama.to') || urlStr.includes('anime-sama.si') || urlStr.includes('anime-sama.fr') ||
+    (config.baseURL && (config.baseURL.includes('anime-sama.to') || config.baseURL.includes('anime-sama.si') || config.baseURL.includes('anime-sama.fr')));
+
+  if (!ENABLE_ANIME_PROXY || !isAnimeSama) {
+    return deps.axiosAnimeSama({ ...config, timeout: 30000 });
+  }
+
+  // Construire l'URL compl\u00e8te
+  let absoluteUrl = urlStr;
+  if (config.baseURL && !urlStr.startsWith('http')) {
+    absoluteUrl = config.baseURL + urlStr;
+  } else if (!urlStr.startsWith('http') && !absoluteUrl.startsWith('http')) {
+    // Si l'URL n'est pas compl\u00e8te et qu'on n'a pas de baseURL, utiliser ANIME_SAMA_URL
+    absoluteUrl = deps.ANIME_SAMA_URL + (urlStr.startsWith('/') ? urlStr.substring(1) : urlStr);
+  }
+
+  const requestUrl = buildBypass403RequestUrl(absoluteUrl);
+
+  // Headers pour les requ\u00eates Anime-Sama via proxy
+  const animeSamaHeaders = {
+    'Accept-Language': 'fr-FR,fr;q=0.6',
+    'Cache-Control': 'no-cache',
+    'Pragma': 'no-cache',
+    'Priority': 'u=0, i',
+    'Sec-CH-UA': '"Chromium";v="142", "Brave";v="142", "Not_A Brand";v="99"',
+    'Sec-CH-UA-Mobile': '?0',
+    'Sec-CH-UA-Platform': '"Windows"',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'none',
+    'Sec-Fetch-User': '?1',
+    'Sec-GPC': '1',
+    'Upgrade-Insecure-Requests': '1',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36'
+  };
+
+  // Supprimer les headers li\u00e9s \u00e0 l'IP d'origine pour \u00e9viter de les transmettre
+  const headersToRemove = ['X-Forwarded-For', 'X-Real-IP', 'X-Client-IP', 'CF-Connecting-IP', 'True-Client-IP', 'X-Original-Forwarded-For'];
+  const cleanHeaders = { ...animeSamaHeaders };
+
+  // Si config.headers existe, le nettoyer aussi
+  if (config.headers) {
+    const configHeaders = { ...config.headers };
+    headersToRemove.forEach(header => {
+      delete configHeaders[header];
+      delete configHeaders[header.toLowerCase()];
+    });
+    Object.assign(cleanHeaders, configHeaders);
+  }
+
+  const proxyscrapePool = [
+    ...PROXIES.map(proxy => ({ proxy, type: 'socks5' })),
+    ...HTTP_PROXIES.map(proxy => ({ proxy, type: 'http' }))
+  ]
+    .sort(() => Math.random() - 0.5)
+    .slice(0, MAX_ANIMESAMA_PROXY_ATTEMPTS);
+
+  if (proxyscrapePool.length === 0) {
+    return deps.axiosAnimeSama({
+      ...config,
+      url: requestUrl,
+      headers: cleanHeaders,
+      timeout: 30000,
+      decompress: true
+    });
+  }
+
+  let lastError = null;
+
+  // Essayer quelques proxies ProxyScrape vers le serveur BYPASS403
+  for (let i = 0; i < proxyscrapePool.length; i++) {
+    const entry = proxyscrapePool[i];
+    const agents = getDarkinoHttpProxyAgent(entry.proxy);
+    const proxyLabel = `${entry.type}:${entry.proxy.host}:${entry.proxy.port}`;
+
+    try {
+      const response = await deps.axiosAnimeSama({
+        ...config,
+        url: requestUrl,
+        headers: cleanHeaders,
+        timeout: 30000,
+        decompress: true,
+        httpAgent: agents.httpAgent,
+        httpsAgent: agents.httpsAgent,
+        proxy: false
+      });
+      return response;
+    } catch (error) {
+      lastError = error;
+      const statusCode = error.response?.status;
+      const errorCode = statusCode || error.code || 'unknown';
+
+      if (statusCode === 403 || statusCode === 429) {
+        console.warn(`[ANIMESAMA REQUEST] ${proxyLabel} bloque (${statusCode}), retry...`);
+        continue;
+      }
+
+      if (statusCode >= 500 && statusCode < 600) {
+        console.warn(`[ANIMESAMA REQUEST] ${proxyLabel} erreur ${statusCode}, retry...`);
+        continue;
+      }
+
+      if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') {
+        console.warn(`[ANIMESAMA REQUEST] ${proxyLabel} timeout (${errorCode}), retry...`);
+        continue;
+      }
+
+      throw error;
+    }
+  }
+
+  if (lastError) {
+    throw lastError;
+  }
+
+  throw new Error('Erreur inconnue lors de la requ\u00eate Anime Sama');
+}
+
+// Fonction utilitaire pour requ\u00eates Wiflix avec proxy
+async function axiosWiflixRequest(config) {
+  const urlStr = config.url || '';
+  const isWiflix = urlStr.includes(WIFLIX_BASE_URL) || urlStr.includes('flemmix') ||
+    (config.baseURL && (config.baseURL.includes(WIFLIX_BASE_URL) || config.baseURL.includes('flemmix')));
+
+  if (!ENABLE_WIFLIX_PROXY || !isWiflix) {
+    const defaultConfig = {
+      timeout: 15000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'fr-FR,fr;q=0.9,en;q=0.8',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'DNT': '1',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1'
+      }
+    };
+
+    const finalConfig = { ...defaultConfig, ...config };
+
+    try {
+      const response = await axios(finalConfig);
+      return response;
+    } catch (error) {
+      // Ajouter des informations sur l'URL utilis\u00e9e \u00e0 l'erreur
+      error.wiflixUrl = config.url || urlStr;
+      error.wiflixProxy = 'Direct (sans proxy)';
+      error.wiflixProxiedUrl = config.url || urlStr;
+      console.error(`[WIFLIX REQUEST] Erreur: ${error.message}`);
+      throw error;
+    }
+  }
+
+  // Construire l'URL compl\u00e8te
+  let absoluteUrl = urlStr;
+  if (config.baseURL && !urlStr.startsWith('http')) {
+    absoluteUrl = config.baseURL + urlStr;
+  } else if (!urlStr.startsWith('http')) {
+    absoluteUrl = WIFLIX_BASE_URL + (urlStr.startsWith('/') ? urlStr : '/' + urlStr);
+  }
+
+  // Filtrer les proxies disponibles (non en cooldown)
+  const availableProxies = getAvailableProxies(CLOUDFLARE_WORKERS_PROXIES);
+
+  const defaultHeaders = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+    'Accept-Language': 'fr-FR,fr;q=0.9,en;q=0.8',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'DNT': '1',
+    'Connection': 'keep-alive',
+    'Upgrade-Insecure-Requests': '1',
+    ...(config.headers || {})
+  };
+
+  let lastError = null;
+
+  // Essayer avec les proxies Cloudflare disponibles
+  for (let i = 0; i < availableProxies.length; i++) {
+    const cloudflareProxy = availableProxies[i];
+    const proxiedUrl = buildProxiedUrl(cloudflareProxy, absoluteUrl);
+
+    try {
+      // Extraire url et headers de config pour \u00e9viter les conflits
+      const { url: _, headers: __, ...restConfig } = config;
+      const response = await axios({
+        url: proxiedUrl,
+        method: restConfig.method || 'GET',
+        headers: defaultHeaders,
+        timeout: restConfig.timeout || 15000,
+        decompress: true,
+        responseType: restConfig.responseType || 'text',
+        ...restConfig
+      });
+
+      // Succ\u00e8s : marquer le proxy comme sain
+      markProxyAsHealthy(cloudflareProxy);
+      return response;
+    } catch (error) {
+      const statusCode = error.response?.status;
+      const errorCode = statusCode || error.code || 'unknown';
+
+      // Ajouter des informations sur l'URL et le proxy utilis\u00e9 \u00e0 l'erreur
+      error.wiflixUrl = absoluteUrl;
+      error.wiflixProxy = cloudflareProxy;
+      error.wiflixProxiedUrl = proxiedUrl;
+      lastError = error;
+
+      // En cas d'erreur 429 (Too Many Requests), marquer le proxy et essayer le suivant
+      if (statusCode === 429) {
+        markProxyAsErrored(cloudflareProxy, 429);
+        continue;
+      }
+
+      // En cas d'erreur 5xx, marquer le proxy et essayer le suivant
+      if (statusCode >= 500 && statusCode < 600) {
+        markProxyAsErrored(cloudflareProxy, statusCode);
+        continue;
+      }
+
+      // En cas de timeout, marquer le proxy et essayer le suivant
+      if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') {
+        markProxyAsErrored(cloudflareProxy, errorCode);
+        continue;
+      }
+
+      // Pour les autres erreurs, throw imm\u00e9diatement sans essayer d'autres proxies
+      throw error;
+    }
+  }
+
+  // Si on arrive ici, tous les proxies ont \u00e9chou\u00e9
+  if (lastError) throw lastError;
+  throw new Error('Erreur inconnue lors de la requ\u00eate Wiflix');
+}
+
+// === UTILITY: Fusion des streaming_links par langue ===
+function mergeStreamingLinks(oldLinks, newLinks) {
+  // oldLinks et newLinks sont des tableaux d'objets { language, players }
+  const merged = {};
+
+  // D'abord, copier les anciens liens
+  (oldLinks || []).forEach(l => {
+    merged[l.language] = Array.isArray(l.players) ? [...l.players] : [];
+  });
+
+  // Ensuite, remplacer par les nouveaux liens si disponibles
+  (newLinks || []).forEach(l => {
+    if (l.players && l.players.length > 0) {
+      // Si on a de nouveaux lecteurs, on remplace compl\u00e8tement les anciens
+      merged[l.language] = Array.isArray(l.players) ? [...l.players] : [];
+    }
+  });
+
+  // Retourne sous forme d'array d'objets
+  return Object.entries(merged).map(([language, players]) => ({ language, players }));
+}
+
+// === UTILITY: Migration des anciens fichiers de cache s\u00e9par\u00e9s vers le cache unifi\u00e9 ===
+async function migrateOldCacheFiles(safeAnimeName, animeCacheDir) {
+  try {
+    const allCacheFiles = await fsp.readdir(animeCacheDir).catch(() => []);
+    const oldSeasonFiles = allCacheFiles.filter(f => f.startsWith(safeAnimeName + '_') && f.endsWith('.json'));
+
+    if (oldSeasonFiles.length === 0) return;
+
+    const migratedSeasons = {};
+
+    for (const seasonFile of oldSeasonFiles) {
+      try {
+        const seasonContent = await fsp.readFile(path.join(animeCacheDir, seasonFile), 'utf-8');
+        const seasonCache = JSON.parse(seasonContent);
+        const seasonName = seasonFile.replace(safeAnimeName + '_', '').replace('.json', '');
+
+        migratedSeasons[seasonName] = {
+          timestamp: seasonCache.timestamp || Date.now(),
+          episodes: seasonCache.episodes || []
+        };
+      } catch (e) {
+      }
+    }
+
+    if (Object.keys(migratedSeasons).length > 0) {
+      const unifiedCacheData = {
+        timestamp: Date.now(),
+        seasons: migratedSeasons
+      };
+
+      const animeCachePath = path.join(animeCacheDir, `${safeAnimeName}.json`);
+      await writeFileAtomic(animeCachePath, JSON.stringify(unifiedCacheData), 'utf-8');
+
+      // Nettoyer les anciens fichiers apr\u00e8s migration r\u00e9ussie
+      await cleanupOldCacheFiles(safeAnimeName, animeCacheDir);
+    }
+  } catch (e) {
+  }
+}
+
+// === UTILITY: Nettoyage des anciens fichiers de cache s\u00e9par\u00e9s ===
+async function cleanupOldCacheFiles(safeAnimeName, animeCacheDir) {
+  try {
+    const allCacheFiles = await fsp.readdir(animeCacheDir).catch(() => []);
+    const oldSeasonFiles = allCacheFiles.filter(f => f.startsWith(safeAnimeName + '_') && f.endsWith('.json'));
+
+    for (const oldFile of oldSeasonFiles) {
+      try {
+        await fsp.unlink(path.join(animeCacheDir, oldFile));
+      } catch (e) {
+      }
+    }
+  } catch (e) {
+  }
+}
+
+// Fonction pour supprimer les lecteurs fsvid des r\u00e9ponses FStream
+function removeFsvidPlayers(data, isVip = false) {
+  // Si pas de donn\u00e9es, retourner tel quel
+  if (!data) {
+    return data;
+  }
+
+  // Si l'utilisateur est VIP, ne pas filtrer les lecteurs fsvid
+  if (isVip) {
+    return data;
+  }
+
+  // Par d\u00e9faut, toujours filtrer les lecteurs fsvid (m\u00eame si remove_fsvid est false)
+
+  // Pour les films : filtrer players.organized
+  if (data.players && typeof data.players === 'object') {
+    const filteredPlayers = {};
+    let totalPlayers = 0;
+
+    Object.keys(data.players).forEach(playerType => {
+      if (Array.isArray(data.players[playerType])) {
+        // Filtrer les lecteurs dont l'URL contient "fsvid"
+        const filteredPlayerList = data.players[playerType].filter(player => {
+          return !player.url || !player.url.includes('fsvid');
+        });
+
+        if (filteredPlayerList.length > 0) {
+          filteredPlayers[playerType] = filteredPlayerList;
+          totalPlayers += filteredPlayerList.length;
+        }
+      } else {
+        // Si ce n'est pas un array, garder tel quel
+        filteredPlayers[playerType] = data.players[playerType];
+      }
+    });
+
+    return {
+      ...data,
+      players: filteredPlayers,
+      total: totalPlayers,
+      metadata: {
+        ...data.metadata,
+        fsvidFiltered: true
+      }
+    };
+  }
+
+  // Pour les s\u00e9ries : filtrer episodes
+  if (data.episodes && typeof data.episodes === 'object') {
+    const filteredEpisodes = {};
+    let totalPlayers = 0;
+
+    Object.keys(data.episodes).forEach(episodeKey => {
+      const episode = data.episodes[episodeKey];
+      if (episode && typeof episode === 'object') {
+        const filteredEpisode = { ...episode };
+
+        // V\u00e9rifier si l'\u00e9pisode a une structure "languages"
+        if (episode.languages && typeof episode.languages === 'object') {
+          const filteredLanguages = {};
+
+          Object.keys(episode.languages).forEach(languageKey => {
+            const languagePlayers = episode.languages[languageKey];
+
+            if (Array.isArray(languagePlayers)) {
+              // Filtrer les lecteurs dont l'URL contient "fsvid"
+              const filteredPlayerList = languagePlayers.filter(player => {
+                return !player.url || !player.url.includes('fsvid');
+              });
+
+              if (filteredPlayerList.length > 0) {
+                filteredLanguages[languageKey] = filteredPlayerList;
+                totalPlayers += filteredPlayerList.length;
+              }
+            } else {
+              // Si ce n'est pas un array, garder tel quel
+              filteredLanguages[languageKey] = languagePlayers;
+            }
+          });
+
+          filteredEpisode.languages = filteredLanguages;
+        } else {
+          // Structure ancienne sans "languages" - filtrer directement
+          Object.keys(episode).forEach(playerType => {
+            if (Array.isArray(episode[playerType])) {
+              // Filtrer les lecteurs dont l'URL contient "fsvid"
+              const filteredPlayerList = episode[playerType].filter(player => {
+                return !player.url || !player.url.includes('fsvid');
+              });
+
+              if (filteredPlayerList.length > 0) {
+                filteredEpisode[playerType] = filteredPlayerList;
+                totalPlayers += filteredPlayerList.length;
+              }
+            }
+          });
+        }
+
+        // Garder l'\u00e9pisode seulement s'il a encore des lecteurs
+        if (episode.languages ? Object.keys(filteredEpisode.languages).length > 0 : Object.keys(filteredEpisode).some(key => Array.isArray(filteredEpisode[key]) && filteredEpisode[key].length > 0)) {
+          filteredEpisodes[episodeKey] = filteredEpisode;
+        }
+      }
+    });
+
+    return {
+      ...data,
+      episodes: filteredEpisodes,
+      total: totalPlayers,
+      metadata: {
+        ...data.metadata,
+        fsvidFiltered: true
+      }
+    };
+  }
+
+  return data;
+}
+
+// Fonction pour formater les erreurs Coflix
+function formatCoflixError(error, context = '') {
+  if (error && error.isAxiosError) {
+    const url = error.config && error.config.url ? error.config.url : '';
+    const statusCode = error.response ? error.response.status : '';
+    const statusText = error.response ? error.response.statusText : '';
+
+    // Ne pas logger les erreurs 400
+    if (statusCode === 400) {
+      return '';
+    }
+
+    return `[AxiosError] ${error.code || ''} ${error.message} ${statusCode ? `(${statusCode} ${statusText})` : ''} ${url}`;
+  } else {
+    const msg = error && error.message
+      ? error.message
+      : (typeof error === 'string' ? error : JSON.stringify(error));
+    return msg;
+  }
+}
+
+module.exports = {
+  configure,
+
+  // Darkino
+  generateDarkiReferer,
+  axiosDarkinoRequest,
+
+  // Coflix
+  axiosCoflixRequest,
+  formatCoflixError,
+
+  // French-Stream
+  axiosFrenchStreamRequest,
+
+  // LecteurVideo
+  axiosLecteurVideoRequest,
+
+  // FStream
+  axiosFStreamRequest,
+
+  // AnimeSama
+  axiosAnimeSamaRequest,
+
+  // Wiflix
+  axiosWiflixRequest,
+
+  // Streaming link utilities
+  mergeStreamingLinks,
+  migrateOldCacheFiles,
+  cleanupOldCacheFiles,
+
+  // FStream player filter
+  removeFsvidPlayers
+};

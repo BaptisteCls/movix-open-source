@@ -1,0 +1,46 @@
+/* ─── Mode Léger : désactive TOUS les effets GPU lourds ─────────────────── */
+
+/* Backdrop-blur — attrape toutes les variantes Tailwind (xl, lg, md, sm, arbitraires) */
+[data-light-mode="true"] [class*="backdrop-blur"] {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  background-color: rgba(10, 10, 15, 0.95) !important;
+}
+
+/* Filter blur — attrape blur-sm, blur-xl, blur-2xl, blur-3xl, blur-[60px], etc. */
+[data-light-mode="true"] [class*="blur-"] {
+  filter: none !important;
+}
+
+/* Inline styles — framer-motion et styles JSX qui posent filter/backdrop-filter */
+[data-light-mode="true"] [style*="filter"] {
+  filter: none !important;
+  -webkit-filter: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* Stoppe TOUTES les animations CSS */
+[data-light-mode="true"] [class*="animate-"],
+[data-light-mode="true"] [class*="rainbow"],
+[data-light-mode="true"] .screensaver-kenburns,
+[data-light-mode="true"] .snow-particle {
+  animation: none !important;
+  transition: none !important;
+}
+
+/* Canvas — masque les canvas d'animation (particules, grilles) */
+[data-light-mode="true"] canvas {
+  display: none !important;
+}
+
+/* will-change — supprime la promotion de couches GPU */
+[data-light-mode="true"] [style*="will-change"],
+[data-light-mode="true"] [class*="will-change"] {
+  will-change: auto !important;
+}
+
+/* Snow particles */
+[data-light-mode="true"] .snow-particle {
+  display: none !important;
+}

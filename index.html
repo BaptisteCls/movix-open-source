@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="fr" class="dark">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0" />
+    <meta http-equiv="X-UA-Compatible" content="ie=edge" />
+    <meta name="robots" content="index, noarchive, nosnippet, max-image-preview:small">
+    <meta name="apple-mobile-web-app-title" content="Movix" />
+    <meta name="application-name" content="Movix" />
+    <meta name="msapplication-TileColor" content="#121118" />
+    <meta name="theme-color" content="#121118" />
+    <meta name="description" content="Movix est une interface moderne de gestion et de lecture de contenus multimédia. Service privé, mises à jour régulières et accès réservé." />
+
+    <!-- Prefetch -->
+    <link rel="dns-prefetch" href="//image.tmdb.org">
+    <link rel="preconnect" href="https://image.tmdb.org" crossorigin>
+    <link rel="dns-prefetch" href="//www.gstatic.com">
+    <link rel="dns-prefetch" href="//www.google.com">
+    <link rel="preconnect" href="https://www.gstatic.com" crossorigin>
+    <link rel="dns-prefetch" href="//www.googletagmanager.com">
+    <link rel="preconnect" href="https://www.googletagmanager.com">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+
+    <!-- Bootstrap Icons -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+
+    <!-- Icons -->
+    <link rel="icon" href="/movix.png" />
+    <link rel="icon" type="image/png" href="/movix.png" sizes="96x96" />
+    <link rel="icon" type="image/svg+xml" href="/movix.png" />
+    <link rel="shortcut icon" href="/movix.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/movix.png" />
+    <link rel="manifest" href="/manifest.json" />
+
+    <title data-rh="true">Movix - Plateforme multimédia privée en ligne</title>
+
+    <!-- JSON-LD -->
+    <script type="application/ld+json" data-rh="true">
+    {
+        "@context": "https://schema.org",
+        "@type": "WebApplication",
+        "name": "Movix",
+        "url": "https://movix.rodeo",
+        "applicationCategory": "ProductivityApplication"
+    }
+    </script>
+  <script>
+    (() => {
+      const buildId = '%VITE_APP_BUILD_ID%';
+      const buildStorageKey = 'movix_build_id';
+      const recoveryStorageKey = `movix_build_recovery_${buildId}`;
+
+      const recoverClientCache = async () => {
+        try {
+          if ('serviceWorker' in navigator) {
+            const registrations = await navigator.serviceWorker.getRegistrations();
+            await Promise.all(registrations.map((registration) => registration.unregister()));
+          }
+
+          if ('caches' in window) {
+            const cacheKeys = await caches.keys();
+            await Promise.all(cacheKeys.map((cacheKey) => caches.delete(cacheKey)));
+          }
+        } catch {
+          // Ignore cleanup errors and continue with reload.
+        }
+
+        try {
+          localStorage.setItem(buildStorageKey, buildId);
+          sessionStorage.setItem(recoveryStorageKey, 'done');
+        } catch {
+          // Ignore storage errors.
+        }
+
+        window.location.reload();
+      };
+
+      try {
+        const previousBuildId = localStorage.getItem(buildStorageKey);
+        const alreadyRecovered = sessionStorage.getItem(recoveryStorageKey) === 'done';
+
+        if (previousBuildId && previousBuildId !== buildId && !alreadyRecovered) {
+          window.__MOVIX_CACHE_RECOVERY__ = recoverClientCache();
+          return;
+        }
+
+        localStorage.setItem(buildStorageKey, buildId);
+      } catch {
+        // Ignore storage errors.
+      }
+
+      window.addEventListener('error', (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLScriptElement)) return;
+        if (target.type !== 'module') return;
+        if (!target.src.includes('/assets/')) return;
+
+        try {
+          if (sessionStorage.getItem(recoveryStorageKey) === 'done') {
+            return;
+          }
+        } catch {
+          // Ignore storage errors.
+        }
+
+        window.__MOVIX_CACHE_RECOVERY__ = recoverClientCache();
+      }, true);
+    })();
+  </script>
+  <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
+  <script type="module" src="/src/main.tsx"></script>
+  <script defer data-domain="movix.rodeo" src="https://plausible.io/js/script.js"></script>
+  <!-- Google tag (gtag.js) -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-6Q3B4D5KQL"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+
+    gtag('config', 'G-6Q3B4D5KQL');
+  </script>
+</head>
+<body>
+    
+    <div id="root"></div>
+
+    <script type="text/javascript" src="https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1"></script>
+</body>
+</html>

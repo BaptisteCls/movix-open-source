@@ -1,0 +1,293 @@
+import React, { useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import {
+  Clapperboard,
+  Flag,
+  KeyRound,
+  Link2,
+  ListOrdered,
+  MessageSquare,
+  ShieldCheck,
+  Sparkles,
+  Sprout,
+  Wrench
+} from 'lucide-react';
+
+import AdminComments from './AdminComments';
+import AdminLinkSubmissions from './Greenlight/AdminLinkSubmissions';
+import AdminWishboard from './Greenlight/AdminWishboard';
+import AdminReports from './AdminReports';
+import AdminSharedLists from './AdminSharedLists';
+import StreamingLinksManager from './StreamingLinksManager';
+import VipInvoicesManager from './VipInvoicesManager';
+import VipKeysManager from './VipKeysManager';
+import AnimatedBorderCard from './ui/animated-border-card';
+import ShinyText from './ui/shiny-text';
+
+type AdminSection =
+  | 'links'
+  | 'vip-keys'
+  | 'vip-invoices'
+  | 'wishboard'
+  | 'link-submissions'
+  | 'comments'
+  | 'shared-lists'
+  | 'reports';
+
+interface AdminDashboardProps {
+  role: 'admin' | 'uploader';
+}
+
+interface DashboardSection {
+  id: AdminSection;
+  title: string;
+  description: string;
+  icon: React.ComponentType<{ className?: string }>;
+  accent: string;
+  highlight: string;
+}
+
+const AdminDashboard: React.FC<AdminDashboardProps> = ({ role }) => {
+  const { t } = useTranslation();
+  const [activeSection, setActiveSection] = useState<AdminSection>('links');
+
+  const allSections = useMemo<DashboardSection[]>(
+    () => [
+      {
+        id: 'links',
+        title: t('admin.manageMoviesSeries'),
+        description: t('admin.manageStreamingLinksDesc'),
+        icon: Clapperboard,
+        accent: 'text-blue-300',
+        highlight: '59 130 246'
+      },
+      {
+        id: 'vip-keys',
+        title: t('admin.manageVipKeys'),
+        description: t('admin.manageVipKeysDesc'),
+        icon: KeyRound,
+        accent: 'text-emerald-300',
+        highlight: '16 185 129'
+      },
+      {
+        id: 'vip-invoices',
+        title: t('vipDonations.admin.dashboardTitle'),
+        description: t('vipDonations.admin.dashboardDescription'),
+        icon: Sparkles,
+        accent: 'text-yellow-300',
+        highlight: '234 179 8'
+      },
+      {
+        id: 'wishboard',
+        title: t('admin.wishboardGreenlight'),
+        description: t('admin.manageContentRequests'),
+        icon: Sprout,
+        accent: 'text-red-300',
+        highlight: '239 68 68'
+      },
+      {
+        id: 'link-submissions',
+        title: t('admin.submittedLinks'),
+        description: t('admin.reviewSubmittedLinksDesc'),
+        icon: Link2,
+        accent: 'text-teal-300',
+        highlight: '20 184 166'
+      },
+      {
+        id: 'comments',
+        title: t('admin.manageComments'),
+        description: t('admin.manageCommentsDesc'),
+        icon: MessageSquare,
+        accent: 'text-fuchsia-300',
+        highlight: '217 70 239'
+      },
+      {
+        id: 'shared-lists',
+        title: t('admin.sharedLists'),
+        description: t('admin.manageSharedListsDesc'),
+        icon: ListOrdered,
+        accent: 'text-orange-300',
+        highlight: '249 115 22'
+      },
+      {
+        id: 'reports',
+        title: t('admin.reports', 'Signalements'),
+        description: t('admin.manageReportsDesc', 'Gérer les signalements de commentaires et listes'),
+        icon: Flag,
+        accent: 'text-rose-300',
+        highlight: '244 63 94'
+      }
+    ],
+    [t]
+  );
+
+  const sections = useMemo(() => {
+    if (role === 'uploader') {
+      return allSections.filter((section) => (
+        section.id === 'links'
+        || section.id === 'wishboard'
+        || section.id === 'link-submissions'
+      ));
+    }
+
+    return allSections;
+  }, [allSections, role]);
+
+  const activeSectionMeta = sections.find((section) => section.id === activeSection) || sections[0];
+
+  return (
+    <div className="container mx-auto px-4 py-8">
+      <div className="mb-8 text-center">
+        <div className="inline-flex items-center justify-center rounded-full bg-white/5 p-3 ring-1 ring-white/10 mb-4">
+          <Wrench className="h-7 w-7 text-white" />
+        </div>
+        <div className="mb-2 flex justify-center">
+          <ShinyText
+            text={role === 'uploader' ? t('admin.uploaderSpace') : t('admin.movixAdministration')}
+            speed={2}
+            color="#ffffff"
+            shineColor="#fbbf24"
+            className="text-4xl font-bold"
+          />
+        </div>
+        <p className="text-lg text-gray-400">
+          {role === 'uploader'
+            ? t('admin.streamingLinksManagement')
+            : t('admin.adminInterface')}
+        </p>
+      </div>
+
+      {sections.length > 1 && (
+        <div className="mb-8 grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-4">
+          {sections.map((section) => {
+            const Icon = section.icon;
+            const isActive = activeSection === section.id;
+
+            return (
+              <button
+                key={section.id}
+                type="button"
+                onClick={() => setActiveSection(section.id)}
+                className="text-left"
+              >
+                <AnimatedBorderCard
+                  highlightColor={section.highlight}
+                  backgroundColor="10 10 10"
+                  className={`h-full p-5 transition-all ${
+                    isActive
+                      ? 'scale-[1.02] shadow-[0_18px_45px_rgba(0,0,0,0.22)]'
+                      : 'opacity-90 hover:opacity-100'
+                  }`}
+                >
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="rounded-xl bg-white/5 p-3 ring-1 ring-white/10">
+                        <Icon className={`h-6 w-6 ${section.accent}`} />
+                      </div>
+                      {isActive && (
+                        <span className="inline-flex h-3 w-3 rounded-full bg-white/80" aria-hidden="true">
+                        </span>
+                      )}
+                    </div>
+                    <div>
+                      <h3 className="text-xl font-semibold text-white">{section.title}</h3>
+                      <p className="mt-2 text-sm leading-6 text-white/52">{section.description}</p>
+                    </div>
+                  </div>
+                </AnimatedBorderCard>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {activeSection === 'vip-invoices' && role === 'admin' ? (
+        <div>
+          <h2 className="mb-6 flex items-center gap-3 text-2xl font-bold text-white">
+            <ShieldCheck className="h-6 w-6 text-yellow-300" />
+            {t('vipDonations.admin.dashboardTitle')}
+          </h2>
+          <VipInvoicesManager />
+        </div>
+      ) : (
+        <AnimatedBorderCard
+          highlightColor={activeSectionMeta?.highlight || '234 179 8'}
+          backgroundColor="10 10 10"
+          className="p-6 md:p-7"
+        >
+          {activeSection === 'links' && (
+            <div>
+              <h2 className="mb-6 flex items-center gap-3 text-2xl font-bold text-white">
+                <Clapperboard className="h-6 w-6 text-blue-300" />
+                {t('admin.manageMoviesSeries')}
+              </h2>
+              <StreamingLinksManager />
+            </div>
+          )}
+
+          {activeSection === 'vip-keys' && role === 'admin' && (
+            <div>
+              <h2 className="mb-6 flex items-center gap-3 text-2xl font-bold text-white">
+                <KeyRound className="h-6 w-6 text-emerald-300" />
+                {t('admin.manageVipKeys')}
+              </h2>
+              <VipKeysManager />
+            </div>
+          )}
+
+          {activeSection === 'wishboard' && (role === 'admin' || role === 'uploader') && (
+            <div>
+              <h2 className="mb-6 flex items-center gap-3 text-2xl font-bold text-white">
+                <Sprout className="h-6 w-6 text-red-300" />
+                {t('admin.wishboardGreenlight')}
+              </h2>
+              <AdminWishboard />
+            </div>
+          )}
+
+          {activeSection === 'link-submissions' && (role === 'admin' || role === 'uploader') && (
+            <div>
+              <h2 className="mb-6 flex items-center gap-3 text-2xl font-bold text-white">
+                <Link2 className="h-6 w-6 text-teal-300" />
+                {t('admin.userSubmittedLinks')}
+              </h2>
+              <AdminLinkSubmissions />
+            </div>
+          )}
+
+          {activeSection === 'comments' && role === 'admin' && (
+            <div>
+              <h2 className="mb-6 flex items-center gap-3 text-2xl font-bold text-white">
+                <MessageSquare className="h-6 w-6 text-fuchsia-300" />
+                {t('admin.manageComments')}
+              </h2>
+              <AdminComments />
+            </div>
+          )}
+
+          {activeSection === 'shared-lists' && role === 'admin' && (
+            <div>
+              <h2 className="mb-6 flex items-center gap-3 text-2xl font-bold text-white">
+                <ListOrdered className="h-6 w-6 text-orange-300" />
+                {t('admin.sharedLists')}
+              </h2>
+              <AdminSharedLists />
+            </div>
+          )}
+
+          {activeSection === 'reports' && role === 'admin' && (
+            <div>
+              <h2 className="mb-6 flex items-center gap-3 text-2xl font-bold text-white">
+                <Flag className="h-6 w-6 text-rose-300" />
+                {t('admin.reports', 'Signalements')}
+              </h2>
+              <AdminReports />
+            </div>
+          )}
+        </AnimatedBorderCard>
+      )}
+    </div>
+  );
+};
+
+export default AdminDashboard;
