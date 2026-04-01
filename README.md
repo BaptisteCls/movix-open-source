@@ -50,6 +50,10 @@
   </a>
 </p>
 
+<p align="center">
+  <strong>Licence :</strong> Creative Commons Attribution-NonCommercial 4.0 International (CC BY-NC 4.0) · <a href="./LICENSE">LICENSE</a>
+</p>
+
 Movix est un monorepo produit pour une plateforme de streaming communautaire. Le frontend, l'API principale, la WatchParty, les proxies, les outils navigateur et plusieurs briques d'infra vivent dans le même dépôt parce qu'ils évoluent ensemble.
 
 Ce n'est pas un simple duo "frontend + backend". Une feature peut très vite traverser plusieurs couches à la fois : interface React, persistance locale, sync backend, extraction vidéo, proxy Python et parfois extension navigateur.
@@ -213,3 +217,7 @@ Pour un premier lancement local, configure au minimum :
 ## Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=MysticSaba-max/movix-open-source&type=Timeline)](https://star-history.com/#MysticSaba-max/movix-open-source&Timeline)
+
+## Licence
+
+Ce projet est distribué sous licence Creative Commons Attribution-NonCommercial 4.0 International (CC BY-NC 4.0). Le texte complet est disponible dans [LICENSE](LICENSE).
