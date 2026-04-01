@@ -28,14 +28,10 @@ const TVDIRECT_BASE_URL = "https://tvdirect.ddns.net";
 const VAVOO_BASE_URL = "https://tvvoo.hayd.uk/cfg-fr";
 // URL du serveur proxy local (proxiesembed)
 const PROXY_SERVER_URL = process.env.PROXY_SERVER_URL;
-const M3U_PATH = path.join(__dirname, "france.m3u");
+/*
 
-// URL de base pour TVMio (Stremio addon)
-const TVMIO_BASE_URL =
   "https://tvmio.gleeze.com/eyJjb3VudHJpZXMiOlsiRlIiXSwiY2F0ZWdvcmllcyI6eyJGUiI6WyJHZW5lcmFsIPCfk7oiLCJTcG9ydHMg4pq9IiwiRG9jdW1lbnRhaXJlcyDwn4yNIiwiRmlsbXMg8J+OrCIsIkluZm9ybWF0aW9ucyDwn5OwIiwiRW5mYW50cyDwn5G2IiwiTXVzaWMg8J+OtSJdfSwiZW5hYmxlU2VhcmNoIjpmYWxzZX0";
 
-// TVMio categories mapping (catalogId -> group-title filter)
-const TVMIO_CATEGORIES = {
   tvmio_general: {
     genre: "FR | General",
     remoteGenre: "General 📺",
@@ -79,6 +75,9 @@ const TVMIO_CATEGORIES = {
     emoji: "🎵",
   },
 };
+
+*/
+const TVMIO_CATEGORIES = {};
 
 // URL de base pour Wiflix (Witv)
 const WITV_BASE_URL = "https://witv.team";
@@ -444,6 +443,7 @@ const M3U_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
  * Parse local M3U file (cached)
  */
 async function parseM3u() {
+  return [];
   // Return cached data if still fresh
   if (m3uCache && Date.now() - m3uCacheTime < M3U_CACHE_TTL) {
     return m3uCache;
@@ -3454,7 +3454,7 @@ router.get("/resolve-livehdtv", async (req, res) => {
 router.get("/manifest", async (req, res) => {
   try {
     // Nouvelle clé de cache pour la version fusionnée (v4 = added Linkzy)
-    const cacheKey = generateCacheKey("manifest_combined_v6");
+    const cacheKey = generateCacheKey("manifest_combined_v7");
 
     // Vérifier le cache
     const cached = await getFromCache(cacheKey);
@@ -3571,15 +3571,6 @@ router.get("/manifest", async (req, res) => {
     manifest.catalogs = [...matchesCatalogs, ...manifest.catalogs];
     manifest.idPrefixes.push("match_");
 
-    // Ajouter les catalogues TVMio
-    for (const [catId, config] of Object.entries(TVMIO_CATEGORIES)) {
-      manifest.catalogs.push({
-        type: "tv",
-        id: catId,
-        name: config.name,
-      });
-    }
-    manifest.idPrefixes.push("tvmio-");
 
     // [DÉSACTIVÉ] Linkzy temporairement désactivé
     // for (const [catId, config] of Object.entries(LINKZY_CATEGORIES)) {
@@ -3611,9 +3602,7 @@ router.get("/catalog/:type/:catalogId", async (req, res) => {
 
   try {
     const catalogCacheVersion =
-      catalogId.startsWith("tvmio_") ||
-      catalogId.startsWith("sosplay_") ||
-      catalogId.startsWith("livetv_")
+      catalogId.startsWith("sosplay_") || catalogId.startsWith("livetv_")
         ? "v5"
         : "v1";
     const cacheKey = generateCacheKey(
@@ -3774,7 +3763,6 @@ router.get("/stream/:type/:channelId", async (req, res) => {
     // Block VIP-only sources immediately if not VIP
     if (
       (channelId.startsWith("matches_") ||
-        channelId.startsWith("tvmio-") ||
         channelId.startsWith("iptv_")) &&
       !isVip.vip
     ) {

@@ -832,11 +832,8 @@ const LiveTVPlayer: React.FC<LiveTVPlayerProps> = ({
         const isVavooStream = streamUrl.includes('/sunshine/') ||
             (streams && streams[currentStreamIndex]?.behaviorHints?.notWebReady === true);
 
-        // Check if this is a TVMio stream
-        const isTvmioStream = channelId.startsWith('tvmio-') || !!(currentStream as any)._isTvmio;
-
         // Check if this is a Wiflix stream (has originalUrl from backend, or lansdrud.space/livetvde.net domain)
-        const isWiflixStream = !isTvmioStream && (!!currentStream.originalUrl || streamUrl.includes('lansdrud.space') || streamUrl.includes('livetvde.net'));
+        const isWiflixStream = !!currentStream.originalUrl || streamUrl.includes('lansdrud.space') || streamUrl.includes('livetvde.net');
 
         // Check if this is a Linkzy stream
         const isLinkzyStream = streamUrl.includes('linkzy') || (currentStream?.title?.toLowerCase().includes('linkzy'));
@@ -852,8 +849,7 @@ const LiveTVPlayer: React.FC<LiveTVPlayerProps> = ({
 
         // Determine if extension will handle this stream (via Blob proxy)
         // Wiflix streams with extension should use originalUrl (unproxied) + ExtensionLoader
-        // TVMio streams: extension already resolved the URL and set DNR headers, play directly
-        const extensionHandlesStream = effectiveExtensionAvailable && !isTvmioStream && (isHttp || isVavooStream || isWiflixStream);
+        const extensionHandlesStream = effectiveExtensionAvailable && (isHttp || isVavooStream || isWiflixStream);
 
         // Force REMOTE proxy (proxiesembed) ONLY if:
         // 1. FamilyRestream/TF1 (always use remote proxy for these)
@@ -929,17 +925,11 @@ const LiveTVPlayer: React.FC<LiveTVPlayerProps> = ({
 
         // Determine if this is an MPEG-TS stream (either direct or via proxy for known TS providers)
         // If it's proxied FamilyRestream, it will be served as MPEG-TS
-        // TVMio streams: check the originalUrl to know if it's HLS (.m3u8) or raw MPEG-TS
-        const tvmioOriginalUrl = (currentStream.originalUrl || '').toLowerCase();
-        const isTvmioHls = isTvmioStream && (tvmioOriginalUrl.includes('.m3u8') || streamUrl.includes('.m3u8'));
-        const isTvmioMpegTs = isTvmioStream && !isTvmioHls; // Raw TS streams (no .m3u8 in URL)
-        
         const isMpegTs = isFamilyRestream || 
-                         isTvmioMpegTs ||
                          finalUrl.endsWith('.ts') || 
                          (useProxy && finalUrl.includes('familyrestream.com'));
 
-        console.log('Player selection:', { isTvmioStream, isTvmioHls, isTvmioMpegTs, isMpegTs, isDash, finalUrl });
+        console.log('Player selection:', { isMpegTs, isDash, finalUrl });
 
         if (isMpegTs && mpegts.isSupported()) {
             console.log('Initializing MPEG-TS player for:', finalUrl);
@@ -1285,97 +1275,8 @@ const LiveTVPlayer: React.FC<LiveTVPlayerProps> = ({
 
                 // Détecter les erreurs de codec/buffer (navigateur non supporté ou accélération GPU désactivée)
                 if (data.details === 'bufferAddCodecError' || (data.details === 'bufferAppendError' && data.fatal)) {
-                    // For TVMio streams: fallback to MPEG-TS player instead of showing error
-                    if (isTvmioStream && mpegts.isSupported()) {
-                        console.log('[TVMIO] HLS codec error, falling back to MPEG-TS player...');
-                        hls.destroy();
-                        hlsRef.current = null;
-
-                        const mpegPlayer = mpegts.createPlayer({
-                            type: 'mpegts',
-                            isLive: true,
-                            url: finalUrl,
-                            cors: true,
-                        }, {
-                            enableWorker: true,
-                            lazyLoadMaxDuration: 3 * 60,
-                            seekType: 'range',
-                            liveBufferLatencyChasing: true,
-                            liveBufferLatencyMaxLatency: 20,
-                            liveBufferLatencyMinRemain: 1.0,
-                            stashInitialSize: 1024 * 1024,
-                        });
-
-                        mpegtsRef.current = mpegPlayer;
-                        mpegPlayer.attachMediaElement(video);
-                        mpegPlayer.load();
-                        try { mpegPlayer.play(); } catch (e) { console.error('MPEG-TS fallback play error:', e); }
-
-                        mpegPlayer.on(mpegts.Events.ERROR, (etype: any, edetails: any) => {
-                            console.error('MPEG-TS Fallback Error', etype, edetails);
-                            if (etype === mpegts.ErrorTypes.MEDIA_ERROR && edetails === 'MediaMSEError') {
-                                setError(t('liveTV.codecNotSupported'));
-                                setIsLoading(false);
-                            } else if (etype === mpegts.ErrorTypes.NETWORK_ERROR) {
-                                setError(t('liveTV.networkErrorMpegTs'));
-                                setIsLoading(false);
-                            }
-                        });
-
-                        video.addEventListener('playing', () => setIsLoading(false), { once: true });
-                        return;
-                    }
-
                     setError(t('liveTV.codecNotSupportedFull'));
                     setIsLoading(false);
-                    return;
-                }
-
-                // For TVMio: if HLS manifest parse fails (not a valid m3u8), fallback to MPEG-TS
-                if (isTvmioStream && data.fatal && mpegts.isSupported() && 
-                    (data.details === 'manifestParsingError' || data.details === 'manifestLoadError' || 
-                     data.type === Hls.ErrorTypes.NETWORK_ERROR)) {
-                    console.log('[TVMIO] HLS fatal error, falling back to MPEG-TS player...');
-                    hls.destroy();
-                    hlsRef.current = null;
-
-                    const mpegPlayer = mpegts.createPlayer({
-                        type: 'mpegts',
-                        isLive: true,
-                        url: finalUrl,
-                        cors: true,
-                    }, {
-                        enableWorker: true,
-                        lazyLoadMaxDuration: 3 * 60,
-                        seekType: 'range',
-                        liveBufferLatencyChasing: true,
-                        liveBufferLatencyMaxLatency: 20,
-                        liveBufferLatencyMinRemain: 1.0,
-                        stashInitialSize: 1024 * 1024,
-                    });
-
-                    mpegtsRef.current = mpegPlayer;
-                    mpegPlayer.attachMediaElement(video);
-                    mpegPlayer.load();
-                    try { mpegPlayer.play(); } catch (e) { console.error('MPEG-TS fallback play error:', e); }
-
-                    mpegPlayer.on(mpegts.Events.ERROR, (etype: any, edetails: any) => {
-                        console.error('MPEG-TS Fallback Error', etype, edetails);
-                        if (etype === mpegts.ErrorTypes.MEDIA_ERROR && edetails === 'MediaMSEError') {
-                            setError(t('liveTV.codecNotSupported'));
-                            setIsLoading(false);
-                        } else if (etype === mpegts.ErrorTypes.NETWORK_ERROR) {
-                            // Try next server if available
-                            if (currentStreamIndex < streams.length - 1) {
-                                setCurrentStreamIndex(prev => prev + 1);
-                            } else {
-                                setError(t('liveTV.networkErrorMpegTs'));
-                                setIsLoading(false);
-                            }
-                        }
-                    });
-
-                    video.addEventListener('playing', () => setIsLoading(false), { once: true });
                     return;
                 }
 

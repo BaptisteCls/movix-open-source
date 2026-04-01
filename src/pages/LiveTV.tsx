@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Tv, Loader2, Radio, Search, Crown, Puzzle, ChevronDown, Lock, Zap, Signal, Wifi } from 'lucide-react';
+import { Tv, Loader2, Radio, Search, Crown, Puzzle, ChevronDown, Lock, Zap, Wifi } from 'lucide-react';
 
 
 import { Link } from 'react-router-dom';
@@ -136,7 +136,6 @@ const livetvStatusOptions = [
 const sourceDisplayNames: { [key: string]: string } = {
   'linkzy': 'liveTV.freeSource',
   'matches': 'liveTV.matchesCatalogSource',
-  'tvmio': 'TVMio',
   'wiflix': 'Landscape',
   'sosplay': 'Bolaloca',
   'livetv': 'LiveTV',
@@ -147,7 +146,6 @@ const sourceDisplayNames: { [key: string]: string } = {
 const getSourceKey = (catalogId: string): string => {
   if (catalogId.startsWith('linkzy_')) return 'linkzy';
   if (catalogId.startsWith('matches_')) return 'matches';
-  if (catalogId.startsWith('tvmio_')) return 'tvmio';
   if (catalogId.startsWith('wiflix_')) return 'wiflix';
   if (catalogId.startsWith('sosplay_')) return 'sosplay';
   if (catalogId.startsWith('livetv_')) return 'livetv';
@@ -236,8 +234,8 @@ const LiveTV: React.FC = () => {
   const hasExtension = isExtensionAvailable();
   const hasFullAccess = isVip || hasExtension;
   
-  // Matches, TVMio & IPTV require VIP specifically (not just extension)
-  const isVipOnlySource = selectedSource === 'matches' || selectedSource === 'tvmio' || selectedSource === 'iptv';
+  // Matches & IPTV require VIP specifically (not just extension)
+  const isVipOnlySource = selectedSource === 'matches' || selectedSource === 'iptv';
   const hasAccess = isVipOnlySource ? isVip : hasFullAccess;
 
   const filteredChannels = channels.filter(channel => {
@@ -598,7 +596,7 @@ const LiveTV: React.FC = () => {
     let name = catalog.name;
 
     // 1. Enlever les préfixes de source connus
-    const prefixes = ['Linkzy', 'Wiflix', 'TVMio', 'Sosplay', 'Bolaloca', 'LiveTV', 'Matches'];
+    const prefixes = ['Linkzy', 'Wiflix', 'Sosplay', 'Bolaloca', 'LiveTV', 'Matches'];
     for (const prefix of prefixes) {
       if (name.toLowerCase().startsWith(prefix.toLowerCase() + ' ')) {
         name = name.slice(prefix.length + 1);
@@ -653,7 +651,6 @@ const LiveTV: React.FC = () => {
   const sourceIcons: Record<string, React.ReactNode> = {
     'linkzy': <Zap className="w-3.5 h-3.5" />,
     'matches': <span className="text-sm leading-none">⚽</span>,
-    'tvmio': <Signal className="w-3.5 h-3.5" />,
     'wiflix': <Tv className="w-3.5 h-3.5" />,
     'sosplay': <Radio className="w-3.5 h-3.5" />,
     'livetv': <Radio className="w-3.5 h-3.5" />,
@@ -668,7 +665,7 @@ const LiveTV: React.FC = () => {
   }, [availableSources, isVip]);
 
   const handleSourceChange = (newSource: string) => {
-    const srcIsVipOnly = newSource === 'tvmio' || newSource === 'matches' || newSource === 'iptv';
+    const srcIsVipOnly = newSource === 'matches' || newSource === 'iptv';
     if (srcIsVipOnly && !isVip) return;
     if (!srcIsVipOnly && !hasFullAccess) return;
 
@@ -746,7 +743,7 @@ const LiveTV: React.FC = () => {
             {!loadingCatalogs && hasFullAccess && allSources.length > 0 && (
               <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none -mx-1 px-1">
                 {allSources.map((source) => {
-                  const srcIsVipOnly = source === 'tvmio' || source === 'matches' || source === 'iptv';
+                  const srcIsVipOnly = source === 'matches' || source === 'iptv';
                   const isLocked = srcIsVipOnly ? !isVip : !hasFullAccess;
                   const isActive = selectedSource === source;
                   const label = sourceDisplayNames[source]?.startsWith('liveTV.') ? t(sourceDisplayNames[source]) : (sourceDisplayNames[source] || source);
