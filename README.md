@@ -5,7 +5,7 @@
 <h1 align="center">Movix</h1>
 
 <p align="center">
-  <strong>Le 1er site de streaming open source made in France et 100% vibecodé.</strong>
+  <strong>Le 1er site de streaming open source made in France et partiellement vibecodé.</strong>
 </p>
 
 <p align="center">
