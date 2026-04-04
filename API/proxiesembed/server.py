@@ -541,7 +541,8 @@ PROXIES = json.loads(os.environ.get('PROXIES_SOCKS5_JSON', '[]'))
 SIBNET_PROXY_CONFIG = json.loads(os.environ.get('SIBNET_PROXY_SOCKS5_JSON', '{"type":"socks5h"}'))
 
 DEEPBRID_API_KEY = os.environ.get('DEEPBRID_API_KEY', '').strip()
-REAL_DEBRID_TOKEN = os.environ.get('REAL_DEBRID_TOKEN', '').strip()
+REAL_DEBRID_API_KEY = os.environ.get('REAL_DEBRID_API_KEY', '').strip()
+REAL_DEBRID_API_BASE = 'https://api.real-debrid.com/rest/1.0'
 
 DEBRID_PROVIDERS = frozenset({'deepbrid', 'realdebrid'})
 
@@ -1298,7 +1299,7 @@ class ProxyServer:
             return response
         
         self.app.middlewares.append(cors_handler)
-    
+
     def _should_disable_ssl(self, url: str) -> bool:
         """Check if SSL verification should be disabled"""
         try:
@@ -1353,7 +1354,7 @@ class ProxyServer:
         self.app.router.add_get('/drm/resource', self.drm_resource_handler)
         self.app.router.add_get('/drm/b/{base_b64}/{subpath:.*}', self.drm_base_resource_handler)
         
-        # Deepbrid routes
+        # Debrid routes
         self.app.router.add_post('/api/debrid/unlock', self.debrid_unlock_handler)
 
         # System
@@ -1414,6 +1415,19 @@ class ProxyServer:
         except Exception:
             return ''
 
+    def _get_realdebrid_proxy_urls(self) -> Tuple[Optional[str], Optional[str]]:
+        proxy = self._get_random_proxy()
+        proxy_url = _build_socks5_proxy_url(proxy, default_type='socks5h')
+        connector_proxy_url = _build_aiohttp_socks_proxy_url(proxy, default_type='socks5h')
+        return proxy_url, connector_proxy_url
+
+    def _build_realdebrid_headers(self) -> Dict[str, str]:
+        return {
+            'Authorization': f'Bearer {REAL_DEBRID_API_KEY}',
+            'Accept': 'application/json',
+            'User-Agent': 'movix-proxiesembed/1.0',
+        }
+
     async def _unlock_with_deepbrid(self, link: str, password: str) -> Response:
         """Unlock a link via Deepbrid."""
         if not DEEPBRID_API_KEY:
@@ -1452,20 +1466,14 @@ class ProxyServer:
 
     async def _unlock_with_realdebrid(self, link: str, password: str) -> Response:
         """Unlock a link via Real-Debrid."""
-        if not REAL_DEBRID_TOKEN:
+        if not REAL_DEBRID_API_KEY:
             return web.json_response({'status': 'error', 'error': 'Service de debridage non configure'}, status=503)
 
-        proxy = self._get_random_proxy()
-        proxy_url = _build_socks5_proxy_url(proxy, default_type='socks5')
-        connector_proxy_url = _build_aiohttp_socks_proxy_url(proxy, default_type='socks5')
+        proxy_url, connector_proxy_url = self._get_realdebrid_proxy_urls()
         if not proxy_url or not connector_proxy_url:
             return web.json_response({'status': 'error', 'error': 'Proxy SOCKS5 Real-Debrid non configure'}, status=503)
 
-        headers = {
-            'Authorization': f'Bearer {REAL_DEBRID_TOKEN}',
-            'Accept': 'application/json',
-            'User-Agent': 'movix-proxiesembed/1.0',
-        }
+        headers = self._build_realdebrid_headers()
         form_data = {
             'link': link,
             'password': password or '',
@@ -1476,7 +1484,7 @@ class ProxyServer:
 
         async with aiohttp.ClientSession(connector=connector) as session:
             async with session.post(
-                'https://app.real-debrid.com/rest/1.0/unrestrict/link',
+                f'{REAL_DEBRID_API_BASE}/unrestrict/link',
                 headers=headers,
                 data=form_data,
                 timeout=ClientTimeout(total=30)
