@@ -1288,7 +1288,7 @@ const Home: React.FC = () => {
                             🔥&nbsp;&nbsp;{t('home.teamSelection')}
                           </span>
                           <span className="text-white text-4xl sm:text-5xl font-semibold">
-                            Rascal Does Not Dream of Bunny Girl Senpai
+                            {t('home.featuredSpotlightTitle')}
                           </span>
                           <div className="flex flex-row gap-4 items-center flex-wrap">
                             <span className="px-3 py-1 rounded-lg text-sm ring-1 ring-white text-white">
@@ -1298,14 +1298,14 @@ const Home: React.FC = () => {
                               <Star className="size-4 text-yellow-300 inline align-sub mr-1" fill="currentColor" />
                               {featuredSeries.vote_average?.toFixed(1)}/10
                             </span>
-                            <span className="text-white text-base">Animation</span>
-                            <span className="text-white text-base">Comédie</span>
-                            <span className="text-white text-base">Drame</span>
+                            <span className="text-white text-base">{t('home.featuredSpotlightGenreAnimation')}</span>
+                            <span className="text-white text-base">{t('home.featuredSpotlightGenreComedy')}</span>
+                            <span className="text-white text-base">{t('home.featuredSpotlightGenreDrama')}</span>
                             <span className="text-white text-base">·</span>
                             <span className="text-white text-base">24min/{t('home.perEpisode')}</span>
                           </div>
                           <p className="text-gray-300 font-medium my-0 w-full lg:w-2/3 xl:w-1/2 line-clamp-4">
-                            Sakuta Azusagawa, un lycéen solitaire, rencontre Mai Sakurajima, une actrice célèbre habillée en bunny girl que personne ne semble voir. Ensemble, ils tentent de comprendre le mystérieux "syndrome de la puberté" qui affecte les adolescents autour d'eux.
+                            {t('home.featuredSpotlightDescription')}
                           </p>
                           <div className="flex flex-row gap-4 items-center mt-4">
                             <Link to="/tv/4fsgG0N6KdeMTqMhnJMeHdF5RBB6IG1PMLQLR">

@@ -41,6 +41,16 @@ const { wrapper } = require('axios-cookiejar-support');
 const tough = require('tough-cookie');
 const axiosHelpers = require('./utils/axiosHelpers');
 
+const DEFAULT_DARKIWORLD_BASE_URL = 'https://darkiworld2026.com';
+
+function normalizeBaseUrl(value) {
+  return String(value || '').trim().replace(/\/+$/, '');
+}
+
+const DARKIWORLD_BASE_URL = normalizeBaseUrl(process.env.DARKIWORLD_BASE_URL || DEFAULT_DARKIWORLD_BASE_URL);
+
+const cookieJar = new tough.CookieJar();
+
 // === Darkino session & headers setup ===
 const darkiHeaders = {
   'accept': 'application/json',
@@ -50,50 +60,11 @@ const darkiHeaders = {
   'cookie': process.env.DARKIWORLD_COOKIES || '',
   'pragma': 'no-cache',
   'priority': 'u=1, i',
-  'sec-ch-ua': '"Brave";v="143", "Chromium";v="143", "Not A(Brand";v="24"',
-  'sec-ch-ua-mobile': '?0',
-  'sec-ch-ua-platform': '"Windows"',
   'sec-fetch-dest': 'empty',
   'sec-fetch-mode': 'cors',
   'sec-fetch-site': 'same-origin',
-  'sec-gpc': '1',
-  'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36',
   'x-xsrf-token': process.env.DARKIWORLD_XSRF_TOKEN || ''
 };
-
-const cookieJar = new tough.CookieJar();
-
-// Pre-fill cookie jar with Darkino session cookies from env
-if (process.env.DARKIWORLD_REMEMBER_TOKEN) {
-  cookieJar.setCookieSync(`remember_web_3dc7a913ef5fd4b890ecabe3487085573e16cf82=${process.env.DARKIWORLD_REMEMBER_TOKEN}`, 'https://darkiworld2026.com');
-}
-cookieJar.setCookieSync('SERVERID=S1', 'https://darkiworld2026.com');
-if (process.env.DARKIWORLD_XSRF_COOKIE) {
-  cookieJar.setCookieSync(`XSRF-TOKEN=${process.env.DARKIWORLD_XSRF_COOKIE}`, 'https://darkiworld2026.com');
-}
-if (process.env.DARKIWORLD_SESSION) {
-  cookieJar.setCookieSync(`darkiworld_session=${process.env.DARKIWORLD_SESSION}`, 'https://darkiworld2026.com');
-}
-
-// Periodic cleanup of Darkino cookie jar to prevent unbounded memory growth (every 30 min)
-setInterval(() => {
-  try {
-    cookieJar.removeAllCookiesSync();
-    // Re-add essential cookies from env
-    if (process.env.DARKIWORLD_REMEMBER_TOKEN) {
-      cookieJar.setCookieSync(`remember_web_3dc7a913ef5fd4b890ecabe3487085573e16cf82=${process.env.DARKIWORLD_REMEMBER_TOKEN}`, 'https://darkiworld2026.com');
-    }
-    cookieJar.setCookieSync('SERVERID=S1', 'https://darkiworld2026.com');
-    if (process.env.DARKIWORLD_XSRF_COOKIE) {
-      cookieJar.setCookieSync(`XSRF-TOKEN=${process.env.DARKIWORLD_XSRF_COOKIE}`, 'https://darkiworld2026.com');
-    }
-    if (process.env.DARKIWORLD_SESSION) {
-      cookieJar.setCookieSync(`darkiworld_session=${process.env.DARKIWORLD_SESSION}`, 'https://darkiworld2026.com');
-    }
-  } catch (err) {
-    console.error('[COOKIE JAR] Cleanup error:', err.message);
-  }
-}, 30 * 60 * 1000).unref();
 
 // Coflix config
 const COFLIX_BASE_URL = 'https://coflix.space';
@@ -392,9 +363,10 @@ const {
 // ==========================================================================
 
 // Pre-existing routes (already extracted before this modularization)
+const sharedListsRouter = require('./sharedListsRoutes');
 app.use('/api/comments', require('./commentsRoutes'));
 app.use('/api/likes', require('./likesRoutes'));
-app.use('/api/shared-lists', require('./sharedListsRoutes'));
+app.use('/api/shared-lists', sharedListsRouter);
 app.use('/api/livetv', require('./liveTvRoutes'));
 
 // New modular routes
@@ -432,14 +404,21 @@ app.use('/api/purstream', purstreamRouter);
 // MySQL pool initialization — pool unique via mysqlPool.js
 // ==========================================================================
 
-const { initPool, getPool } = require('./mysqlPool');
+const {
+  initPool,
+  getPool,
+  SCHEMA_BOOTSTRAP_LOCK_NAME,
+  withMysqlAdvisoryLock
+} = require('./mysqlPool');
 const { ensureAccountLinksStorage } = require('./utils/accountLinks');
 const { ensureCloneLinksStorage } = require('./utils/cloneLinks');
 
-(async () => {
+const appReady = (async () => {
   try {
     const pool = await initPool();
     console.log('MySQL unified pool initialized successfully');
+    await withMysqlAdvisoryLock(pool, SCHEMA_BOOTSTRAP_LOCK_NAME, async () => {
+      console.log(`[Bootstrap] Worker ${process.pid} acquired MySQL schema lock`);
 
     // Créer la table user_sessions si elle n'existe pas
     await pool.execute(`
@@ -514,8 +493,10 @@ const { ensureCloneLinksStorage } = require('./utils/cloneLinks');
     await initWrappedTables();
     app.use('/api/wrapped', wrappedRouter);
     console.log('Wrapped routes initialized successfully');
+    });
   } catch (error) {
     console.error('MySQL connection error:', error.message);
+    throw error;
   }
 })();
 
@@ -536,4 +517,4 @@ app.use((err, req, res, next) => {
   });
 });
 
-module.exports = { app, getAppPool };
+module.exports = { app, appReady, getAppPool };

@@ -4,7 +4,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import i18n from '../i18n';
 import { ChevronLeft, ChevronRight, Share2, X, Sparkles, Calendar, Trophy, BarChart3, Clock, Flame, Music, ShieldOff, Settings } from 'lucide-react';
-import { fetchWrappedData, WrappedData, WrappedSlide, WrappedTopContent } from '../services/wrappedService';
+import { fetchWrappedData, WrappedData, WrappedProgress, WrappedSlide, WrappedTopContent } from '../services/wrappedService';
 import { SquareBackground } from '../components/ui/square-background';
 import AnimatedBorderCard from '../components/ui/animated-border-card';
 import ShinyText from '../components/ui/shiny-text';
@@ -49,6 +49,23 @@ function formatDurationLabel(minutes: number): string {
         return `${h} heure${h > 1 ? 's' : ''}`;
     }
     return `${minutes} minute${minutes > 1 ? 's' : ''}`;
+}
+
+function formatCompactDuration(minutes: number, t: (key: string, options?: Record<string, unknown>) => string): string {
+    const safeMinutes = Math.max(0, Math.round(minutes));
+
+    if (safeMinutes >= 60) {
+        const hours = Math.floor(safeMinutes / 60);
+        const remainingMinutes = safeMinutes % 60;
+
+        if (remainingMinutes === 0) {
+            return `${hours}${t('wrapped.hoursShort')}`;
+        }
+
+        return `${hours}${t('wrapped.hoursShort')} ${remainingMinutes}${t('wrapped.minutesShort')}`;
+    }
+
+    return `${safeMinutes}${t('wrapped.minutesShort')}`;
 }
 
 // ==========================================
@@ -1196,6 +1213,7 @@ const WrappedPage: React.FC = () => {
     const [direction, setDirection] = useState(0);
     const [tmdbData, setTmdbData] = useState<Map<number, TMDBData>>(new Map());
     const [noData, setNoData] = useState(false);
+    const [wrappedProgress, setWrappedProgress] = useState<WrappedProgress | null>(null);
     const bgMode = (localStorage.getItem('settings_bg_mode') as 'combined' | 'static' | 'animated') || 'combined';
     const dataCollectionEnabled = localStorage.getItem('privacy_data_collection') !== 'false';
 
@@ -1344,12 +1362,14 @@ const WrappedPage: React.FC = () => {
                 }
 
                 setWrappedData(response.wrapped);
+                setWrappedProgress(response.progress ?? null);
                 setNoData(false);
                 // Fetch TMDB data for posters
                 fetchTMDBData(response.wrapped.topContent);
             } else {
                 // No data available for this user/year
                 setWrappedData(null);
+                setWrappedProgress(response.progress ?? null);
                 setNoData(true);
             }
 
@@ -1423,6 +1443,48 @@ const WrappedPage: React.FC = () => {
         }
     };
 
+    const wrappedRequirementCards = wrappedProgress ? [
+        {
+            key: 'minutes',
+            label: t('wrapped.requirementWatchTime'),
+            current: formatCompactDuration(wrappedProgress.current.minutes, t),
+            required: formatCompactDuration(wrappedProgress.requirements.minutes, t)
+        },
+        {
+            key: 'uniqueTitles',
+            label: t('wrapped.requirementTitles'),
+            current: wrappedProgress.current.uniqueTitles.toLocaleString(i18n.language),
+            required: wrappedProgress.requirements.uniqueTitles.toLocaleString(i18n.language)
+        },
+        {
+            key: 'sessions',
+            label: t('wrapped.requirementSessions'),
+            current: wrappedProgress.current.sessions.toLocaleString(i18n.language),
+            required: wrappedProgress.requirements.sessions.toLocaleString(i18n.language)
+        },
+        {
+            key: 'activeDays',
+            label: t('wrapped.requirementActiveDays'),
+            current: wrappedProgress.current.activeDays.toLocaleString(i18n.language),
+            required: wrappedProgress.requirements.activeDays.toLocaleString(i18n.language)
+        }
+    ] : [];
+
+    const wrappedMissingItems = wrappedProgress ? [
+        wrappedProgress.missing.minutes > 0
+            ? t('wrapped.missingWatchTime', { value: formatCompactDuration(wrappedProgress.missing.minutes, t) })
+            : null,
+        wrappedProgress.missing.uniqueTitles > 0
+            ? t('wrapped.missingTitles', { count: wrappedProgress.missing.uniqueTitles })
+            : null,
+        wrappedProgress.missing.sessions > 0
+            ? t('wrapped.missingSessions', { count: wrappedProgress.missing.sessions })
+            : null,
+        wrappedProgress.missing.activeDays > 0
+            ? t('wrapped.missingActiveDays', { count: wrappedProgress.missing.activeDays })
+            : null
+    ].filter(Boolean) as string[] : [];
+
     // Loading state
     if (loading) {
         return (
@@ -1495,7 +1557,7 @@ const WrappedPage: React.FC = () => {
                         initial={{ opacity: 0, y: 20 }}
                         animate={{ opacity: 1, y: 0 }}
                         transition={{ delay: 0.6 }}
-                        className="max-w-md"
+                        className="max-w-2xl w-full"
                     >
                         <AnimatedBorderCard
                             highlightColor="168 85 247"
@@ -1505,6 +1567,61 @@ const WrappedPage: React.FC = () => {
                             <p className="text-base md:text-lg text-white/80 leading-relaxed mb-4">
                                 {t('wrapped.notEnoughDataForYear', { year })}
                             </p>
+                            {wrappedProgress && (
+                                <div className="mb-6 rounded-2xl border border-white/10 bg-white/5 p-4 text-left">
+                                    <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-4">
+                                        <div>
+                                            <p className="text-sm font-semibold text-white">{t('wrapped.unlockRequirementsTitle')}</p>
+                                            <p className="text-xs text-white/60">
+                                                {t('wrapped.unlockRequirementsDesc', {
+                                                    time: formatCompactDuration(wrappedProgress.requirements.minutes, t),
+                                                    titles: wrappedProgress.requirements.uniqueTitles,
+                                                    sessions: wrappedProgress.requirements.sessions,
+                                                    days: wrappedProgress.requirements.activeDays
+                                                })}
+                                            </p>
+                                        </div>
+                                        <div className="inline-flex items-center rounded-full border border-purple-400/20 bg-purple-500/10 px-3 py-1 text-xs font-semibold text-purple-200">
+                                            {t('wrapped.progressPercent', { percent: wrappedProgress.completionPercent })}
+                                        </div>
+                                    </div>
+
+                                    <div className="grid gap-3 md:grid-cols-2 mb-4">
+                                        {wrappedRequirementCards.map((item) => (
+                                            <div key={item.key} className="rounded-xl border border-white/8 bg-black/20 p-3">
+                                                <p className="text-[11px] uppercase tracking-[0.18em] text-white/40 mb-1">{item.label}</p>
+                                                <p className="text-lg font-bold text-white">
+                                                    {item.current}
+                                                    <span className="ml-2 text-sm font-medium text-white/45">/ {item.required}</span>
+                                                </p>
+                                            </div>
+                                        ))}
+                                    </div>
+
+                                    <div className="rounded-xl border border-amber-400/15 bg-amber-500/5 p-3">
+                                        <p className="text-sm font-medium text-amber-200 mb-2">
+                                            {t('wrapped.missingSummaryTitle', { count: wrappedProgress.missingCriteriaCount })}
+                                        </p>
+                                        <p className="text-xs text-white/65 leading-relaxed mb-3">
+                                            {t('wrapped.missingTimeInfo', {
+                                                current: formatCompactDuration(wrappedProgress.current.minutes, t),
+                                                required: formatCompactDuration(wrappedProgress.requirements.minutes, t),
+                                                remaining: formatCompactDuration(wrappedProgress.missing.minutes, t)
+                                            })}
+                                        </p>
+                                        <div className="flex flex-wrap gap-2">
+                                            {wrappedMissingItems.map((item) => (
+                                                <span
+                                                    key={item}
+                                                    className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-white/75"
+                                                >
+                                                    {item}
+                                                </span>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
                             <p className="text-white/60 text-sm leading-relaxed mb-6">
                                 {t('wrapped.keepWatching')}
                             </p>

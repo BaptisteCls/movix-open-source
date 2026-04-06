@@ -119,7 +119,7 @@ const ProfileMenu: React.FC = () => {
           <div className="relative group">
             <img
               src={isAuthenticated ? profileImage : 'https://as2.ftcdn.net/v2/jpg/05/89/93/27/1000_F_589932782_vQAEAZhHnq1QCGu5ikwrYaQD0Mmurm0N.webp'}
-              alt="Profile"
+              alt={t('header.profile')}
               className="w-7 h-7 md:w-7 md:h-7 max-md:w-7 max-md:h-7 rounded-full object-cover border-2 border-transparent group-hover:border-red-600 transition-all duration-300 shadow-md"
               onError={(e) => {
                 e.currentTarget.src = 'https://as2.ftcdn.net/v2/jpg/05/89/93/27/1000_F_589932782_vQAEAZhHnq1QCGu5ikwrYaQD0Mmurm0N.webp';
@@ -173,7 +173,7 @@ const ProfileMenu: React.FC = () => {
                     <div className="flex items-center gap-3">
                       <img 
                         src={profileImage} 
-                        alt="Profile"
+                        alt={t('header.profile')}
                         className="w-10 h-10 md:w-10 md:h-10 max-md:w-12 max-md:h-12 rounded-full object-cover border-2 border-red-600/70"
                         onError={(e) => {
                           e.currentTarget.src = 'https://as2.ftcdn.net/v2/jpg/05/89/93/27/1000_F_589932782_vQAEAZhHnq1QCGu5ikwrYaQD0Mmurm0N.webp';
@@ -212,7 +212,7 @@ const ProfileMenu: React.FC = () => {
                       onClick={() => setIsOpen(false)}
                     >
                       <List className="w-4 h-4 md:w-4 md:h-4 max-md:w-5 max-md:h-5 text-gray-400" />
-                      <span className="max-md:text-base">Watchlist</span>
+                      <span className="max-md:text-base">{t('profile.watchlist')}</span>
                     </Link>
                     <Link 
                       to="/profile?tab=favorites"

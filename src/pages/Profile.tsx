@@ -2416,7 +2416,7 @@ const Profile: React.FC = () => {
             >
               <img
                 src={activeProfile?.avatar || userProfile.avatar || 'https://via.placeholder.com/150'}
-                alt="Profile"
+                alt={t('header.profile')}
                 className="w-full h-full object-cover transform transition-transform duration-300 hover:scale-110 filter group-hover:brightness-110"
               />
               {/* Overlay effect on hover */}

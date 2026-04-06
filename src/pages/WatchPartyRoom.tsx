@@ -1401,7 +1401,7 @@ const WatchPartyRoom: React.FC = () => {
           )}
 
           <div className="hidden md:flex items-center">
-            <span className="text-sm mr-2 text-white/70">Code: <span className="font-mono font-bold text-white">{roomInfo.code}</span></span>
+            <span className="text-sm mr-2 text-white/70">{t('watchParty.code')}: <span className="font-mono font-bold text-white">{roomInfo.code}</span></span>
             <button onClick={handleCopyInviteLink} className="p-1.5 bg-white/10 hover:bg-white/20 rounded-md" title={t('watchParty.copyInviteLink')}>
               {linkCopied ? <Check size={18} className="text-green-400" /> : <Copy size={18} />}
             </button>
@@ -1555,7 +1555,7 @@ const WatchPartyRoom: React.FC = () => {
                 }}
               />
               <div className="p-3 border-b border-white/10 flex items-center justify-between shrink-0">
-                <h3 className="font-semibold">Chat ({messages.filter(m => m.type === 'chat').length})</h3>
+                <h3 className="font-semibold">{t('watchParty.chat')} ({messages.filter(m => m.type === 'chat').length})</h3>
                 <button onClick={() => setShowChatPanel(false)} className="p-1 hover:bg-white/10 rounded-md">
                   <X size={18} />
                 </button>
@@ -1572,7 +1572,7 @@ const WatchPartyRoom: React.FC = () => {
                   >
                     <div className="p-3 bg-white/5 border-b border-white/10">
                       <div className="flex items-center justify-between mb-2">
-                        <span className="text-xs font-semibold text-purple-300 uppercase tracking-wide">🗳️ Vote</span>
+                        <span className="text-xs font-semibold text-purple-300 uppercase tracking-wide">🗳️ {t('watchParty.voteLabel')}</span>
                         <span className="text-xs text-orange-400 font-bold">⏱️ {voteCountdown}s</span>
                       </div>
                       <p className="text-sm text-gray-200 mb-3">
@@ -1844,7 +1844,7 @@ const WatchPartyRoom: React.FC = () => {
                           } else { handleCopyInviteLink(); }
                         }}
                         className="p-2 bg-gray-700 hover:bg-gray-600 rounded-md text-gray-300 hover:text-white"
-                        title="Partager via Web Share API"
+                        title={t('watchParty.webShareApi')}
                       >
                         <Share2 size={15} />
                       </button>

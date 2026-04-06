@@ -5,6 +5,7 @@ import { Bold, Italic, Code, Link, List, ListOrdered, Quote, Strikethrough, Eye,
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkEmoji from 'remark-emoji';
+import { useTranslation } from 'react-i18next';
 import EmojiAutocomplete from './EmojiAutocomplete';
 
 interface MarkdownToolbarProps {
@@ -58,32 +59,39 @@ type FormatAction = {
   prefix?: string;
 };
 
-const actions: FormatAction[] = [
-  { icon: <Bold className="w-3.5 h-3.5" />, label: 'Gras', wrap: ['**', '**'] },
-  { icon: <Italic className="w-3.5 h-3.5" />, label: 'Italique', wrap: ['*', '*'] },
-  { icon: <Strikethrough className="w-3.5 h-3.5" />, label: 'Barré', wrap: ['~~', '~~'] },
-  { icon: <Code className="w-3.5 h-3.5" />, label: 'Code', wrap: ['`', '`'] },
-  { icon: <Link className="w-3.5 h-3.5" />, label: 'Lien', wrap: ['[', '](url)'] },
-  { icon: <Quote className="w-3.5 h-3.5" />, label: 'Citation', prefix: '> ' },
-  { icon: <List className="w-3.5 h-3.5" />, label: 'Liste', prefix: '- ' },
-  { icon: <ListOrdered className="w-3.5 h-3.5" />, label: 'Liste numérotée', prefix: '1. ' },
+const buildActions = (t: (key: string) => string): FormatAction[] => [
+  { icon: <Bold className="w-3.5 h-3.5" />, label: t('markdownToolbar.bold'), wrap: ['**', '**'] },
+  { icon: <Italic className="w-3.5 h-3.5" />, label: t('markdownToolbar.italic'), wrap: ['*', '*'] },
+  { icon: <Strikethrough className="w-3.5 h-3.5" />, label: t('markdownToolbar.strikethrough'), wrap: ['~~', '~~'] },
+  { icon: <Code className="w-3.5 h-3.5" />, label: t('markdownToolbar.code'), wrap: ['`', '`'] },
+  { icon: <Link className="w-3.5 h-3.5" />, label: t('markdownToolbar.link'), wrap: ['[', '](url)'] },
+  { icon: <Quote className="w-3.5 h-3.5" />, label: t('markdownToolbar.quote'), prefix: '> ' },
+  { icon: <List className="w-3.5 h-3.5" />, label: t('markdownToolbar.list'), prefix: '- ' },
+  { icon: <ListOrdered className="w-3.5 h-3.5" />, label: t('markdownToolbar.orderedList'), prefix: '1. ' },
 ];
 
-const helpItems = [
-  { syntax: '**texte**', result: 'Gras', preview: <strong className="text-white">texte</strong> },
-  { syntax: '*texte*', result: 'Italique', preview: <em>texte</em> },
-  { syntax: '~~texte~~', result: 'Barré', preview: <del className="text-gray-500">texte</del> },
-  { syntax: '`code`', result: 'Code inline', preview: <code className="bg-gray-900/50 text-blue-300 px-1 py-0.5 rounded text-xs">code</code> },
-  { syntax: '[texte](url)', result: 'Lien', preview: <span className="text-blue-400 underline">texte</span> },
-  { syntax: '> texte', result: 'Citation', preview: <span className="border-l-2 border-gray-500 pl-2 text-gray-400 italic">texte</span> },
-  { syntax: '- item', result: 'Liste', preview: <span>• item</span> },
-  { syntax: '1. item', result: 'Liste numérotée', preview: <span>1. item</span> },
-  { syntax: ':smile:', result: 'Emoji', preview: <span>😄</span> },
-];
+const buildHelpItems = (t: (key: string) => string) => {
+  const sampleText = t('markdownToolbar.sampleText');
+  const sampleItem = t('markdownToolbar.sampleItem');
+
+  return [
+    { syntax: `**${sampleText}**`, result: t('markdownToolbar.bold'), preview: <strong className="text-white">{sampleText}</strong> },
+    { syntax: `*${sampleText}*`, result: t('markdownToolbar.italic'), preview: <em>{sampleText}</em> },
+    { syntax: `~~${sampleText}~~`, result: t('markdownToolbar.strikethrough'), preview: <del className="text-gray-500">{sampleText}</del> },
+    { syntax: '`code`', result: t('markdownToolbar.inlineCode'), preview: <code className="bg-gray-900/50 text-blue-300 px-1 py-0.5 rounded text-xs">code</code> },
+    { syntax: `[${sampleText}](url)`, result: t('markdownToolbar.link'), preview: <span className="text-blue-400 underline">{sampleText}</span> },
+    { syntax: `> ${sampleText}`, result: t('markdownToolbar.quote'), preview: <span className="border-l-2 border-gray-500 pl-2 text-gray-400 italic">{sampleText}</span> },
+    { syntax: `- ${sampleItem}`, result: t('markdownToolbar.list'), preview: <span>• {sampleItem}</span> },
+    { syntax: `1. ${sampleItem}`, result: t('markdownToolbar.orderedList'), preview: <span>1. {sampleItem}</span> },
+    { syntax: ':smile:', result: t('markdownToolbar.emoji'), preview: <span>😄</span> },
+  ];
+};
 
 // Modal d'aide formatage (portail comme AvatarSelector)
 const MarkdownHelpModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen, onClose }) => {
+  const { t } = useTranslation();
   const [isClosing, setIsClosing] = useState(false);
+  const helpItems = buildHelpItems(t);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -129,7 +137,7 @@ const MarkdownHelpModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({
           >
             {/* Header */}
             <div className="flex justify-between items-center mb-5">
-              <h3 className="text-lg font-bold text-white">Guide de formatage</h3>
+              <h3 className="text-lg font-bold text-white">{t('markdownToolbar.guideTitle')}</h3>
               <motion.button
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.95 }}
@@ -155,9 +163,7 @@ const MarkdownHelpModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({
 
             {/* Footer */}
             <div className="mt-5 pt-4 border-t border-gray-700/50">
-              <p className="text-xs text-gray-500">
-                Tape <code className="bg-gray-800 px-1.5 py-0.5 rounded text-gray-300 border border-gray-700/50">:</code> suivi du nom pour rechercher un emoji (ex: <code className="bg-gray-800 px-1.5 py-0.5 rounded text-gray-300 border border-gray-700/50">:smile</code>)
-              </p>
+              <p className="text-xs text-gray-500">{t('markdownToolbar.emojiHelp')}</p>
             </div>
           </motion.div>
         </motion.div>
@@ -168,8 +174,10 @@ const MarkdownHelpModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({
 };
 
 const MarkdownToolbar: React.FC<MarkdownToolbarProps> = ({ textareaRef, value, onChange, maxLength }) => {
+  const { t } = useTranslation();
   const [showPreview, setShowPreview] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
+  const actions = buildActions(t);
 
   const applyFormat = (action: FormatAction) => {
     const textarea = textareaRef.current;
@@ -228,18 +236,18 @@ const MarkdownToolbar: React.FC<MarkdownToolbarProps> = ({ textareaRef, value, o
         <button
           type="button"
           onClick={() => setShowPreview(!showPreview)}
-          title={showPreview ? 'Masquer aperçu' : 'Aperçu'}
+            title={showPreview ? t('markdownToolbar.hidePreview') : t('markdownToolbar.preview')}
           className={`p-1.5 rounded transition-colors duration-150 flex items-center gap-1 text-xs ${
             showPreview ? 'text-blue-400 bg-blue-500/10' : 'text-gray-400 hover:text-white hover:bg-gray-600/50'
           }`}
         >
           {showPreview ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-          <span className="hidden sm:inline">{showPreview ? 'Masquer' : 'Aperçu'}</span>
+          <span className="hidden sm:inline">{showPreview ? t('common.hide') : t('markdownToolbar.preview')}</span>
         </button>
         <button
           type="button"
           onClick={() => setShowHelp(true)}
-          title="Guide de formatage"
+          title={t('markdownToolbar.guideTitle')}
           className="p-1.5 rounded transition-colors duration-150 flex items-center gap-1 text-xs text-gray-400 hover:text-white hover:bg-gray-600/50"
         >
           <Info className="w-3.5 h-3.5" />

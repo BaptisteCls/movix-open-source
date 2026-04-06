@@ -10,6 +10,7 @@ import {
   Tv,
   Heart,
   Unlock,
+  FolderClock,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
@@ -187,6 +188,13 @@ const VipPage: React.FC = () => {
                 >
                   <Crown className="w-4 h-4 mr-2" />
                   {t("vip.donate")}
+                </Link>
+                <Link
+                  to="/vip/invoices"
+                  className="inline-flex h-12 w-full items-center justify-center rounded-lg border border-white/15 px-8 text-white transition-colors hover:bg-white/5 md:w-auto"
+                >
+                  <FolderClock className="w-4 h-4 mr-2" />
+                  {t("vipDonations.page.myInvoicesButton")}
                 </Link>
                 <a
                   href="https://t.me/movix_site"

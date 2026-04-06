@@ -521,6 +521,8 @@ const VipInvoicesManager: React.FC = () => {
                       <p className="font-semibold text-white">
                         {selectedInvoice.paidValue !== null
                           ? `${formatVipFiat(i18n.language, selectedInvoice.paidValue, 'USD')} ${selectedInvoice.paidCoin ? `(${selectedInvoice.paidCoin})` : ''}`.trim()
+                          : selectedInvoice.externalAmount !== null
+                            ? `${selectedInvoice.externalAmount.toFixed(2)} ${selectedInvoice.externalCurrency || ''}`.trim()
                           : '-'}
                       </p>
                     </div>

@@ -793,7 +793,7 @@ const Search: React.FC = () => {
                                                         type="text"
                                                         value={year}
                                                         onChange={(e) => setYear(e.target.value.replace(/[^0-9]/g, ''))}
-                                                        placeholder="Ex: 2023"
+                                                        placeholder={t('search.yearPlaceholder')}
                                                         maxLength={4}
                                                         className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white placeholder:text-white/30 focus:outline-none focus:border-red-500/50 transition-colors pr-10"
                                                     />

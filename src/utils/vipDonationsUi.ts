@@ -3,6 +3,7 @@ import type { TFunction } from 'i18next';
 import type { VipCoin, VipInvoiceStatus, VipPaymentMethod } from '../services/vipDonationsService';
 
 export const TURNSTILE_SITE_KEY = import.meta.env.VITE_TURNSTILE_SITE_KEY || '';
+export type VipDisplayedPaymentMethod = VipPaymentMethod;
 
 export function getVipDurationLabel(
   t: TFunction,
@@ -48,7 +49,7 @@ export function getVipStatusMeta(t: TFunction, status: VipInvoiceStatus) {
 
 export function getVipPaymentLabel(
   t: TFunction,
-  paymentMethod: VipPaymentMethod | null | undefined,
+  paymentMethod: VipDisplayedPaymentMethod | null | undefined,
   coin: VipCoin | null | undefined = null
 ) {
   if (paymentMethod === 'paygate_hosted') {
@@ -69,7 +70,7 @@ export function getVipPaymentLabel(
 
 export function getVipPaymentShortLabel(
   t: TFunction,
-  paymentMethod: VipPaymentMethod | null | undefined,
+  paymentMethod: VipDisplayedPaymentMethod | null | undefined,
   coin: VipCoin | null | undefined = null
 ) {
   if (paymentMethod === 'paygate_hosted') {

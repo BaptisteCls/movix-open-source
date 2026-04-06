@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useLocation, useNavigate, Link } from 'react-router-dom';
 import {
   ArrowLeft, Settings, Shield, Monitor, Smartphone, Tablet,
-  Copy, X, Snowflake, Activity, Trash2, Crown,
+  Copy, X, Snowflake, Activity, Trash2, Crown, Volume2,
   Database, Key, Lock, Palette, Eye, Download, Upload, Globe, AlertTriangle, History, CalendarClock, FlaskConical, Link2
 } from 'lucide-react';
 import axios from 'axios';
@@ -23,6 +23,11 @@ import {
   type NonSyncableStorageReason,
   isSyncableStorageKey
 } from '../utils/syncStorage';
+import {
+  areSoundEffectsEnabled,
+  setSoundEffectsEnabled,
+  SOUND_EFFECTS_CHANGED_EVENT
+} from '../utils/soundSettings';
 import { useTranslation } from 'react-i18next';
 import { AVAILABLE_LANGUAGES, changeLanguage, type SupportedLanguage } from '../i18n';
 import { SquareBackground } from '../components/ui/square-background';
@@ -142,6 +147,10 @@ const SettingsPage: React.FC = () => {
 
   const [smoothScrollEnabled, setSmoothScrollEnabled] = useState(() => {
     return localStorage.getItem('settings_smooth_scroll') !== 'false';
+  });
+
+  const [soundEffectsEnabled, setSoundEffectsEnabledState] = useState(() => {
+    return areSoundEffectsEnabled();
   });
 
   const [isSnowfallActive, setIsSnowfallActive] = useState(() => {
@@ -269,6 +278,20 @@ const SettingsPage: React.FC = () => {
     return () => {
       window.removeEventListener('storage', checkAuth);
       window.removeEventListener('auth_changed', checkAuth);
+    };
+  }, []);
+
+  useEffect(() => {
+    const syncSoundEffectsPreference = () => {
+      setSoundEffectsEnabledState(areSoundEffectsEnabled());
+    };
+
+    window.addEventListener('storage', syncSoundEffectsPreference);
+    window.addEventListener(SOUND_EFFECTS_CHANGED_EVENT, syncSoundEffectsPreference as EventListener);
+
+    return () => {
+      window.removeEventListener('storage', syncSoundEffectsPreference);
+      window.removeEventListener(SOUND_EFFECTS_CHANGED_EVENT, syncSoundEffectsPreference as EventListener);
     };
   }, []);
 
@@ -520,6 +543,12 @@ const SettingsPage: React.FC = () => {
     setSmoothScrollEnabled(newValue);
     localStorage.setItem('settings_smooth_scroll', newValue.toString());
     window.dispatchEvent(new CustomEvent('settings_smooth_scroll_changed'));
+  };
+
+  const handleSoundEffectsToggle = () => {
+    const newValue = !soundEffectsEnabled;
+    setSoundEffectsEnabledState(newValue);
+    setSoundEffectsEnabled(newValue);
   };
 
   const handleSnowfallToggle = () => {
@@ -1146,6 +1175,25 @@ const SettingsPage: React.FC = () => {
                   {renderToggle(smoothScrollEnabled, handleSmoothScrollToggle)}
                 </motion.div>
 
+                {/* Bruitages */}
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.125 }}
+                  className="flex items-center justify-between p-4 bg-gray-800/30 rounded-xl border border-gray-700/40 hover:border-gray-600/50 transition-all group"
+                >
+                  <div className="flex-1 mr-4">
+                    <div className="flex items-center gap-2 mb-0.5">
+                      <Volume2 className="w-3.5 h-3.5 text-orange-400" />
+                      <h4 className="font-medium text-white text-sm">{t('settings.soundEffects')}</h4>
+                    </div>
+                    <p className="text-xs text-gray-500 leading-relaxed">
+                      {t('settings.soundEffectsDesc')}
+                    </p>
+                  </div>
+                  {renderToggle(soundEffectsEnabled, handleSoundEffectsToggle)}
+                </motion.div>
+
                 {/* Effet neige */}
                 <motion.div
                   initial={{ opacity: 0, y: 10 }}
@@ -1297,10 +1345,10 @@ const SettingsPage: React.FC = () => {
                     <div className="flex-1 mr-4">
                       <div className="flex items-center gap-2 mb-0.5">
                         <FlaskConical className="w-3.5 h-3.5 text-green-400" />
-                        <h4 className="font-medium text-white text-sm">{t('settings.introAnimation', 'Animation d\'intro')}</h4>
+                        <h4 className="font-medium text-white text-sm">{t('settings.introAnimation')}</h4>
                       </div>
                       <p className="text-xs text-gray-500 leading-relaxed">
-                        {t('settings.introAnimationDesc', 'Affiche une animation style tableau périodique au lancement du site')}
+                        {t('settings.introAnimationDesc')}
                       </p>
                     </div>
                     {renderToggle(introEnabled, handleIntroToggle, 'green')}
@@ -1366,7 +1414,7 @@ const SettingsPage: React.FC = () => {
                   <Crown className="w-5 h-5 text-yellow-400" />
                 </div>
                 <div>
-                  <h2 className="text-xl font-semibold text-white">VIP</h2>
+            <h2 className="text-xl font-semibold text-white">{t('vip.title')}</h2>
                   <p className="text-sm text-gray-500">{t('settings.vipDesc')}</p>
                 </div>
               </div>
@@ -2191,7 +2239,7 @@ const SettingsPage: React.FC = () => {
                     {accountIdInfo?.provider && accountIdInfo.provider !== 'unknown' && (
                       <div className="text-xs text-gray-400 mb-1 capitalize">{t('settings.provider')}: {accountIdInfo.provider}</div>
                     )}
-                    <div className="text-xs text-gray-400 mb-1">ID</div>
+                    <div className="text-xs text-gray-400 mb-1">{t('admin.idLabel')}</div>
                     <div className="flex items-center justify-between gap-3">
                       <span className="font-mono text-sm text-white break-all">{accountIdInfo?.id || ''}</span>
                       <button

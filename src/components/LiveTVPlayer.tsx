@@ -370,6 +370,11 @@ const LiveTVPlayer: React.FC<LiveTVPlayerProps> = ({
     const RETRY_458_INTERVAL_MS = 500;
     const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+    const formatSourceOptionLabel = useCallback(
+        (source: { title?: string; index: number }) => source.title || t('liveTV.sourceNumber', { index: source.index + 1 }),
+        [t]
+    );
+
     const clearControlsTimeout = useCallback(() => {
         if (controlsTimeoutRef.current) {
             clearTimeout(controlsTimeoutRef.current);
@@ -1865,9 +1870,9 @@ const LiveTVPlayer: React.FC<LiveTVPlayerProps> = ({
                             className="w-full max-w-2xl rounded-3xl border border-white/10 bg-neutral-950/90 p-5 shadow-2xl backdrop-blur-sm"
                         >
                         <div className="mb-4">
-                            <p className="text-xs uppercase tracking-[0.22em] text-red-400">LiveTV</p>
-                            <h3 className="mt-2 text-xl font-semibold text-white">Choisir une source</h3>
-                            <p className="mt-1 text-sm text-gray-400">Le flux sera résolu uniquement pour la source sélectionnée.</p>
+                            <p className="text-xs uppercase tracking-[0.22em] text-red-400">{t('liveTV.title')}</p>
+                            <h3 className="mt-2 text-xl font-semibold text-white">{t('liveTV.chooseSourceTitle')}</h3>
+                            <p className="mt-1 text-sm text-gray-400">{t('liveTV.sourceSelectionHint')}</p>
                         </div>
 
                         <div className="max-h-[60vh] space-y-2 overflow-y-auto pr-1" data-lenis-prevent>
@@ -1885,9 +1890,9 @@ const LiveTVPlayer: React.FC<LiveTVPlayerProps> = ({
                                     >
                                         <div className="flex items-center justify-between gap-3">
                                             <span className="text-sm font-medium text-white">
-                                                {source.title || `Source ${source.index + 1}`}
+                                                {formatSourceOptionLabel(source)}
                                             </span>
-                                            <span className="text-xs text-gray-500">Source {source.index + 1}</span>
+                                            <span className="text-xs text-gray-500">{t('liveTV.sourceNumber', { index: source.index + 1 })}</span>
                                         </div>
                                         {meta && (
                                             <p className="mt-1 text-xs text-gray-400">{meta}</p>
@@ -2011,7 +2016,7 @@ const LiveTVPlayer: React.FC<LiveTVPlayerProps> = ({
 
                     {isLiveTvChannel && sourceOptions.length > 0 && (
                         <div className="flex flex-col items-center gap-2 mt-4">
-                            <span className="text-gray-400 text-sm">Changer de source LiveTV</span>
+                            <span className="text-gray-400 text-sm">{t('liveTV.changeLiveTvSource')}</span>
                             <div className="flex flex-wrap gap-2 justify-center max-w-2xl">
                                 {sourceOptions.map((source) => (
                                     <button
@@ -2023,7 +2028,7 @@ const LiveTVPlayer: React.FC<LiveTVPlayerProps> = ({
                                                 : 'border-gray-600 text-gray-300 hover:bg-gray-700 hover:border-gray-500'
                                         }`}
                                     >
-                                        {source.title || `Source ${source.index + 1}`}
+                                        {formatSourceOptionLabel(source)}
                                     </button>
                                 ))}
                             </div>
@@ -2247,7 +2252,7 @@ const LiveTVPlayer: React.FC<LiveTVPlayerProps> = ({
                         {/* Header */}
                         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800">
                             <h3 className="text-white text-sm font-medium">
-                                {isLiveTvChannel && sourceOptions.length > 0 ? 'Sources LiveTV' : t('liveTV.server')}
+                                {isLiveTvChannel && sourceOptions.length > 0 ? t('liveTV.sourcesTitle') : t('liveTV.server')}
                             </h3>
                             <button
                                 onClick={() => setShowSettings(false)}
@@ -2261,7 +2266,7 @@ const LiveTVPlayer: React.FC<LiveTVPlayerProps> = ({
                         <div className="flex-1 overflow-y-auto p-2 space-y-4" data-lenis-prevent>
                             {isLiveTvChannel && sourceOptions.length > 0 && (
                                 <div>
-                                    <p className="px-2 pb-2 text-[11px] font-medium uppercase tracking-[0.2em] text-gray-500">Sources</p>
+                                    <p className="px-2 pb-2 text-[11px] font-medium uppercase tracking-[0.2em] text-gray-500">{t('watch.sources')}</p>
                                     <div className="space-y-1">
                                         {sourceOptions.map((source) => {
                                             const meta = [source.hoster || source.sourceType, source.language, source.bitrate].filter(Boolean).join(' • ');
@@ -2279,7 +2284,7 @@ const LiveTVPlayer: React.FC<LiveTVPlayerProps> = ({
                                                             <span className="w-2 h-2 bg-red-500 rounded-full flex-shrink-0" />
                                                         )}
                                                         <span className={source.index === selectedSourceIndex ? '' : 'ml-4'}>
-                                                            {source.title || `Source ${source.index + 1}`}
+                                                            {formatSourceOptionLabel(source)}
                                                         </span>
                                                     </div>
                                                     {meta && (

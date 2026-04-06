@@ -731,7 +731,7 @@ const WatchMovie: React.FC = () => {
             if (omegaResponse.data && omegaResponse.data.player_links) {
               omegaResponse.data.player_links = omegaResponse.data.player_links.map((player: { player: string; link: string; is_hd: boolean }) => ({
                 ...player,
-                label: "Sans pubs"
+                label: t('watch.noAds')
               }));
             }
             return omegaResponse.data;

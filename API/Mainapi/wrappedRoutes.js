@@ -115,6 +115,45 @@ const generateRateLimit = rateLimitPerProfile('generate', 6, 60, (req) => {
     return req.headers['x-profile-id'] || req.query.profileId || req.user?.sub;
 });
 
+const WRAPPED_UNLOCK_REQUIREMENTS = Object.freeze({
+    minutes: 120,
+    uniqueTitles: 3,
+    sessions: 5,
+    activeDays: 2
+});
+
+function buildWrappedProgress({ totalMinutes, uniqueTitles, totalSessions, totalActiveDays }) {
+    const current = {
+        minutes: Math.max(0, totalMinutes || 0),
+        uniqueTitles: Math.max(0, uniqueTitles || 0),
+        sessions: Math.max(0, totalSessions || 0),
+        activeDays: Math.max(0, totalActiveDays || 0)
+    };
+
+    const missing = {
+        minutes: Math.max(0, WRAPPED_UNLOCK_REQUIREMENTS.minutes - current.minutes),
+        uniqueTitles: Math.max(0, WRAPPED_UNLOCK_REQUIREMENTS.uniqueTitles - current.uniqueTitles),
+        sessions: Math.max(0, WRAPPED_UNLOCK_REQUIREMENTS.sessions - current.sessions),
+        activeDays: Math.max(0, WRAPPED_UNLOCK_REQUIREMENTS.activeDays - current.activeDays)
+    };
+
+    const progressRatios = [
+        Math.min(current.minutes / WRAPPED_UNLOCK_REQUIREMENTS.minutes, 1),
+        Math.min(current.uniqueTitles / WRAPPED_UNLOCK_REQUIREMENTS.uniqueTitles, 1),
+        Math.min(current.sessions / WRAPPED_UNLOCK_REQUIREMENTS.sessions, 1),
+        Math.min(current.activeDays / WRAPPED_UNLOCK_REQUIREMENTS.activeDays, 1)
+    ];
+
+    return {
+        isEligible: Object.values(missing).every((value) => value === 0),
+        completionPercent: Math.round((progressRatios.reduce((sum, value) => sum + value, 0) / progressRatios.length) * 100),
+        missingCriteriaCount: Object.values(missing).filter((value) => value > 0).length,
+        requirements: { ...WRAPPED_UNLOCK_REQUIREMENTS },
+        current,
+        missing
+    };
+}
+
 // ─── TMDB helpers (via tmdbCache centralisé) ────────────────────────────────
 
 /**
@@ -711,8 +750,18 @@ router.get('/generate/:year', verifyToken, generateRateLimit, async (req, res) =
 
         const totalMinutes = parseInt(viewingStats[0].total_duration) || 0;
         const uniqueTitles = parseInt(viewingStats[0].unique_titles) || 0;
+        const totalSessions = parseInt(viewingStats[0].total_sessions) || 0;
+        const totalActiveDays = dailyActivity.length;
+        const progress = buildWrappedProgress({ totalMinutes, uniqueTitles, totalSessions, totalActiveDays });
 
-        if (totalMinutes === 0 && uniqueTitles === 0) {
+        if (!progress.isEligible) {
+            console.log(`[Wrapped][PERF] Not enough data yet â€” total ${Date.now() - _t.start}ms`);
+            return res.json({
+                success: true,
+                wrapped: null,
+                progress,
+                message: "Pas encore assez de donnÃ©es pour dÃ©bloquer ce Wrapped."
+            });
             console.log(`[Wrapped][PERF] No data — total ${Date.now() - _t.start}ms`);
             return res.json({ success: true, wrapped: null, message: "Pas encore de données pour cette année." });
         }
@@ -839,7 +888,6 @@ router.get('/generate/:year', verifyToken, generateRateLimit, async (req, res) =
 
         // Watching streaks
         let longestStreak = 0, currentStreak = 0;
-        const totalActiveDays = dailyActivity.length;
         for (let i = 0; i < dailyActivity.length; i++) {
             if (i === 0) { currentStreak = 1; }
             else {
@@ -870,8 +918,7 @@ router.get('/generate/:year', verifyToken, generateRateLimit, async (req, res) =
         const monthlyGraph = Array.from({ length: 12 }, (_, i) => ({ month: i + 1, minutes: monthMap[i + 1] || 0 }));
 
         // Session stats
-        const totalSessions = parseInt(viewingStats[0].total_sessions) || 1;
-        const avgSessionMinutes = Math.round(totalMinutes / totalSessions);
+        const avgSessionMinutes = Math.round(totalMinutes / Math.max(totalSessions, 1));
 
         // Base stats
         const totalHours = Math.round(totalMinutes / 60);
@@ -951,7 +998,7 @@ router.get('/generate/:year', verifyToken, generateRateLimit, async (req, res) =
             slides,
             stats: {
                 totalMinutes, totalHours, totalDays, uniqueTitles,
-                totalSessions: parseInt(viewingStats[0].total_sessions) || 0,
+                totalSessions,
                 avgSessionMinutes, totalActiveDays, longestStreak, percentile
             },
             topContent: enrichedTopContent.map((c, i) => {
@@ -993,7 +1040,7 @@ router.get('/generate/:year', verifyToken, generateRateLimit, async (req, res) =
         };
 
         // ── 6. Store in Redis cache (fire-and-forget) ───────────────────────────
-        const responsePayload = { success: true, wrapped };
+        const responsePayload = { success: true, wrapped, progress };
         redisSet(cacheKey, JSON.stringify(responsePayload), WRAPPED_CACHE_TTL);
 
         const totalTime = Date.now() - _t.start;

@@ -2,6 +2,58 @@ import { useEffect } from 'react';
 import Lenis from 'lenis';
 import 'lenis/dist/lenis.css';
 
+const LENIS_BYPASS_SELECTOR = [
+  '[data-lenis-prevent]',
+  '[role="dialog"]',
+  '[aria-modal="true"]',
+  '[data-notifications-popup]',
+  '[data-radix-popper-content-wrapper]',
+  '[data-radix-scroll-area-viewport]',
+].join(', ');
+
+const hasScrollableOverflow = (value: string) =>
+  value === 'auto' || value === 'scroll' || value === 'overlay';
+
+const isScrollableElement = (node: HTMLElement) => {
+  const style = window.getComputedStyle(node);
+
+  return hasScrollableOverflow(style.overflowY) || hasScrollableOverflow(style.overflowX);
+};
+
+const isFloatingLayer = (node: HTMLElement) => {
+  const style = window.getComputedStyle(node);
+
+  if (style.position !== 'fixed' && style.position !== 'absolute') {
+    return false;
+  }
+
+  const zIndex = Number.parseInt(style.zIndex || '', 10);
+
+  return Number.isNaN(zIndex) || zIndex >= 40;
+};
+
+const hasFloatingLayerAncestor = (node: HTMLElement) => {
+  let current: HTMLElement | null = node;
+
+  while (current && current !== document.body && current !== document.documentElement) {
+    if (isFloatingLayer(current)) {
+      return true;
+    }
+
+    current = current.parentElement;
+  }
+
+  return false;
+};
+
+const shouldPreventLenis = (node: HTMLElement) => {
+  if (node.matches(LENIS_BYPASS_SELECTOR) || node.closest(LENIS_BYPASS_SELECTOR)) {
+    return true;
+  }
+
+  return isScrollableElement(node) && hasFloatingLayerAncestor(node);
+};
+
 const SmoothScroll = () => {
   useEffect(() => {
     let lenis: Lenis | null = null;
@@ -55,6 +107,7 @@ const SmoothScroll = () => {
         smoothWheel: true,
         wheelMultiplier: 1,
         touchMultiplier: 2,
+        prevent: shouldPreventLenis,
       });
 
       startRaf();

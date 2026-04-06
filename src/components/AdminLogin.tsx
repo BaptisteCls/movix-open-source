@@ -200,7 +200,7 @@ const AdminLogin: React.FC<AdminLoginProps> = ({ onAdminStatusChange }) => {
           ) : (
             <>
               <Unlock size={14} />
-              <span>Admin</span>
+                                <span>{t('admin.title')}</span>
               <LogOut size={14} />
             </>
           )}
@@ -211,7 +211,7 @@ const AdminLogin: React.FC<AdminLoginProps> = ({ onAdminStatusChange }) => {
           className="flex items-center space-x-1 bg-gray-700 hover:bg-gray-600 px-3 py-1 rounded-md text-white text-sm transition-colors duration-200"
         >
           <Lock size={14} />
-          <span>Admin</span>
+                            <span>{t('admin.title')}</span>
         </button>
       )}
 

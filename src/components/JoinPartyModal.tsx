@@ -94,7 +94,7 @@ const JoinPartyModal: React.FC<JoinPartyModalProps> = ({ isOpen, onClose }) => {
                                         id="code"
                                         value={code}
                                         onChange={(e) => setCode(e.target.value.toUpperCase())}
-                                        placeholder="EX: A1B2C3"
+                                        placeholder={t('watchParty.codeExample')}
                                         className="bg-black/50 border-white/10 text-white placeholder:text-white/30 text-center text-2xl tracking-[0.15em] font-mono h-16 uppercase focus-visible:ring-red-500"
                                         maxLength={8}
                                         autoFocus

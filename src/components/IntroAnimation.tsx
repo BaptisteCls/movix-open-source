@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { useWebHaptics } from 'web-haptics/react';
+import { useTranslation } from 'react-i18next';
 import { useIntro } from '../context/IntroContext';
 
 interface IntroAnimationProps {
@@ -41,6 +42,7 @@ const SPARKLE_POSITIONS = Array.from({ length: 8 }, (_, i) => ({
 }));
 
 const IntroAnimation: React.FC<IntroAnimationProps> = ({ onAnimationComplete }) => {
+  const { t } = useTranslation();
   const [step, setStep] = useState(-1);
   const [flash, setFlash] = useState<string | null>(null);
   const [shaking, setShaking] = useState(false);
@@ -529,7 +531,7 @@ const IntroAnimation: React.FC<IntroAnimationProps> = ({ onAnimationComplete }) 
             {/* Tagline */}
             {step >= 7 && (
               <p className="mt-5 sm:mt-8 text-white/40 text-[10px] sm:text-xs md:text-sm tracking-[0.4em] uppercase font-mono intro-tagline">
-                Le streaming. Repensé.
+                {t('introAnimation.tagline')}
               </p>
             )}
           </div>
@@ -543,7 +545,7 @@ const IntroAnimation: React.FC<IntroAnimationProps> = ({ onAnimationComplete }) 
                     px-3 py-1.5 sm:px-4 sm:py-2 transition-all duration-300 hover:bg-white/5 rounded
                     border border-white/[0.06] hover:border-white/15 z-[100000] font-mono tracking-widest uppercase"
         >
-          Passer
+          {t('introAnimation.skip')}
         </button>
 
       </>}

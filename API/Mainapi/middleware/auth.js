@@ -3,9 +3,15 @@
  * Extracted from server.js -- JWT setup, admin checks, session validation.
  */
 
+const fsp = require('fs').promises;
+const path = require('path');
 const jwt = require('jsonwebtoken');
 const { getPool } = require('../mysqlPool');
+const { getUserDataFilePath } = require('../utils/syncPolicy');
 const AUTH_METHODS = ['discord', 'google', 'bip39'];
+const USER_DATA_DIR = path.join(__dirname, '..', 'data');
+const GUESTS_DIR = path.join(USER_DATA_DIR, 'guests');
+const USERS_DIR = path.join(USER_DATA_DIR, 'users');
 
 // Lazy pool getter -- avoids requiring the pool at module load time
 let _pool = null;
@@ -28,6 +34,91 @@ function issueJwt(userType, userId, sessionId, authMethod = null) {
     payload.authMethod = authMethod;
   }
   return jwt.sign(payload, JWT_SECRET, { algorithm: 'HS256' });
+}
+
+function parseStoredAuth(rawValue) {
+  if (typeof rawValue !== 'string' || !rawValue.trim()) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(rawValue);
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+async function readStoredAccountData(userType, userId) {
+  try {
+    const filePath = getUserDataFilePath(
+      { usersDir: USERS_DIR, guestsDir: GUESTS_DIR },
+      userType,
+      String(userId)
+    );
+    const fileContent = await fsp.readFile(filePath, 'utf8');
+    const parsed = JSON.parse(fileContent);
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch (error) {
+    if (error?.code === 'ENOENT') {
+      return null;
+    }
+
+    console.error('[AUTH] Failed to read stored account data:', error.message || error);
+    return undefined;
+  }
+}
+
+function hasStoredAccountIdentity(userType, userData) {
+  if (!userData || typeof userData !== 'object') {
+    return false;
+  }
+
+  const storedAuth = parseStoredAuth(userData.auth);
+  if (storedAuth?.userProfile && typeof storedAuth.userProfile === 'object') {
+    return true;
+  }
+
+  if (Array.isArray(userData.profiles)) {
+    return true;
+  }
+
+  if (userType === 'bip39') {
+    return userData.bip39_auth === 'true';
+  }
+
+  return typeof userData.oauth_provider === 'string' && userData.oauth_provider.trim().length > 0;
+}
+
+async function validateBackingAccount(userType, userId) {
+  if (!['oauth', 'bip39'].includes(userType) || !userId) {
+    return false;
+  }
+
+  const userData = await readStoredAccountData(userType, userId);
+  if (userData === undefined) {
+    return null;
+  }
+
+  return hasStoredAccountIdentity(userType, userData);
+}
+
+function purgeSessionRecord(sessionId, userId, userType) {
+  try {
+    const pool = getDbPool();
+    if (!pool || !sessionId || !userId || !userType) {
+      return;
+    }
+
+    pool.execute(
+      'DELETE FROM user_sessions WHERE id = ? AND user_id = ? AND user_type = ?',
+      [sessionId, userId, userType]
+    ).catch((error) => {
+      console.error('[AUTH] Failed to purge orphan session:', error.message || error);
+    });
+  } catch (error) {
+    console.error('[AUTH] Failed to schedule orphan session purge:', error.message || error);
+  }
 }
 
 // === Auth validation ===
@@ -83,6 +174,13 @@ async function getAuthIfValid(req) {
 
     if (!hasSession) {
       console.warn(`[AUTH] Session manquante après 3 tentatives pour userType=${userType}, userId=${userId}, sessionId=${sessionId}`);
+      return null;
+    }
+
+    const hasBackingAccount = await validateBackingAccount(userType, userId);
+    if (hasBackingAccount === false) {
+      console.warn(`[AUTH] Account backing data missing for userType=${userType}, userId=${userId}. Purging session ${sessionId}.`);
+      purgeSessionRecord(sessionId, userId, userType);
       return null;
     }
 

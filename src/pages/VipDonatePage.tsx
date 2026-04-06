@@ -25,13 +25,15 @@ import BlurText from '../components/ui/blur-text';
 import { Button } from '../components/ui/button';
 import ShinyText from '../components/ui/shiny-text';
 import { SquareBackground } from '../components/ui/square-background';
-import { createVipInvoice, VipPaymentMethod, VipRecipientMode } from '../services/vipDonationsService';
+import { createVipInvoice, VipRecipientMode } from '../services/vipDonationsService';
 import {
   TURNSTILE_SITE_KEY,
+  VipDisplayedPaymentMethod,
   formatVipFiat,
   getVipDurationLabel,
   getVipPaymentLabel
 } from '../utils/vipDonationsUi';
+import { rememberVipInvoice } from '../utils/vipInvoiceHistory';
 
 const PACKS = [
   { amount: 5, years: 1, accent: 'from-yellow-500/20 to-transparent' },
@@ -54,7 +56,7 @@ const VipDonatePage: React.FC = () => {
   const navigate = useNavigate();
   const { t, i18n } = useTranslation();
   const [selectedPack, setSelectedPack] = useState<number>(5);
-  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<VipPaymentMethod>('btc');
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<VipDisplayedPaymentMethod>('btc');
   const [recipientMode, setRecipientMode] = useState<VipRecipientMode>('self');
   const [payerEmail, setPayerEmail] = useState('');
   const [isCreating, setIsCreating] = useState(false);
@@ -71,6 +73,12 @@ const VipDonatePage: React.FC = () => {
     ? Math.max(activePack.amount, PAYGATE_MIN_AMOUNT_EUR)
     : activePack.amount;
   const isPaygateMinimumApplied = isPaygateSelected && paygateCheckoutAmount > activePack.amount;
+  const nextSteps = useMemo(() => ([
+    t('vipDonations.page.nextStep1'),
+    t('vipDonations.page.nextStep2'),
+    t('vipDonations.page.nextStep3'),
+    t('vipDonations.page.nextStep4')
+  ]), [t]);
 
   useEffect(() => {
     if (!isPaygateAvailableForPack && selectedPaymentMethod === 'paygate_hosted') {
@@ -79,14 +87,21 @@ const VipDonatePage: React.FC = () => {
   }, [isPaygateAvailableForPack, selectedPaymentMethod]);
 
   const paymentMethods = useMemo<Array<{
-    value: VipPaymentMethod;
+    value: VipDisplayedPaymentMethod;
     label: string;
     helper: string;
     image?: string;
     ticker: string;
     accentTone: string;
-  }>>(
-    () => [
+  }>>(() => {
+    const methods: Array<{
+      value: VipDisplayedPaymentMethod;
+      label: string;
+      helper: string;
+      image?: string;
+      ticker: string;
+      accentTone: string;
+    }> = [
       {
         value: 'btc',
         label: 'Bitcoin',
@@ -113,10 +128,11 @@ const VipDonatePage: React.FC = () => {
         accentTone: isPaygateAvailableForPack
           ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-100'
           : 'border-white/15 bg-white/5 text-white/55'
-      }
-    ],
-    [isPaygateAvailableForPack, t]
-  );
+      },
+    ];
+
+    return methods;
+  }, [isPaygateAvailableForPack, t]);
 
   const recipientOptions = useMemo<Array<{
     value: VipRecipientMode;
@@ -149,6 +165,8 @@ const VipDonatePage: React.FC = () => {
     && (!isPaygateSelected || isValidEmail(payerEmail));
 
   const handleCreateInvoice = async () => {
+    const invoicePaymentMethod = selectedPaymentMethod;
+
     if (!canSubmit) {
       if (isPaygateSelected && !isValidEmail(payerEmail)) {
         toast.error(t('vipDonations.page.paygateEmailError'));
@@ -162,7 +180,7 @@ const VipDonatePage: React.FC = () => {
       setIsCreating(true);
       const invoice = await createVipInvoice(
         selectedPack,
-        selectedPaymentMethod,
+        invoicePaymentMethod,
         recipientMode,
         {
           payerEmail: isPaygateSelected ? payerEmail.trim() : undefined,
@@ -170,6 +188,7 @@ const VipDonatePage: React.FC = () => {
         }
       );
       toast.success(t('vipDonations.page.saveUrlTitle'));
+      rememberVipInvoice(invoice.publicId);
       if (invoice.paymentMethod === 'paygate_hosted' && invoice.checkoutUrl) {
         window.open(invoice.checkoutUrl, '_blank', 'noopener,noreferrer');
       }
@@ -419,17 +438,19 @@ const VipDonatePage: React.FC = () => {
                           </div>
                         </div>
 
-                        <div className="rounded-2xl border border-amber-400/25 bg-amber-400/8 p-4">
-                          <div className="flex items-start gap-3">
-                            <div className="rounded-xl bg-black/30 p-2.5">
-                              <AlertTriangle className="h-5 w-5 text-amber-200" />
-                            </div>
-                            <div className="min-w-0 flex-1">
-                              <p className="font-semibold text-white">{t('vipDonations.page.paygateKycTitle')}</p>
-                              <p className="mt-1 text-sm leading-6 text-white/55">{t('vipDonations.page.paygateKycDescription')}</p>
+                        {isPaygateSelected && (
+                          <div className="rounded-2xl border border-amber-400/25 bg-amber-400/8 p-4">
+                            <div className="flex items-start gap-3">
+                              <div className="rounded-xl bg-black/30 p-2.5">
+                                <AlertTriangle className="h-5 w-5 text-amber-200" />
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <p className="font-semibold text-white">{t('vipDonations.page.paygateKycTitle')}</p>
+                                <p className="mt-1 text-sm leading-6 text-white/55">{t('vipDonations.page.paygateKycDescription')}</p>
+                              </div>
                             </div>
                           </div>
-                        </div>
+                        )}
 
                         {isPaygateMinimumApplied && (
                           <div className="rounded-2xl border border-yellow-400/25 bg-yellow-400/8 p-4">
@@ -449,6 +470,7 @@ const VipDonatePage: React.FC = () => {
                             </div>
                           </div>
                         )}
+
                       </div>
                     )}
 
@@ -513,14 +535,12 @@ const VipDonatePage: React.FC = () => {
 
                 <div className="border-t border-white/10 pt-6">
                   <div className="flex items-start gap-3">
-                    <div className="p-2.5 rounded-xl bg-yellow-500/15">
+                    <div className="bg-yellow-500/15 p-2.5 rounded-xl">
                       <ShieldCheck className="h-5 w-5 text-yellow-300" />
                     </div>
                     <div>
                       <p className="font-semibold text-yellow-100">{t('vipDonations.page.saveUrlTitle')}</p>
-                      <p className="mt-2 text-sm leading-6 text-yellow-100/75">
-                        {t('vipDonations.page.saveUrlDescription')}
-                      </p>
+                      <p className="mt-2 text-sm leading-6 text-yellow-100/75">{t('vipDonations.page.saveUrlDescription')}</p>
                     </div>
                   </div>
                 </div>
@@ -629,13 +649,19 @@ const VipDonatePage: React.FC = () => {
                     )}
                   </Button>
 
+                  <Link
+                    to="/vip/invoices"
+                    className="inline-flex h-12 w-full items-center justify-center rounded-lg border border-white/15 bg-transparent px-4 text-sm font-semibold text-white transition-colors hover:bg-white/5"
+                  >
+                    {t('vipDonations.page.myInvoicesButton')}
+                  </Link>
+
                   <div className="border-t border-white/10 pt-5 text-sm text-white/58">
                     <p className="font-medium text-white/80">{t('vipDonations.page.nextStepsTitle')}</p>
                     <div className="mt-3 space-y-2 leading-6">
-                      <p>{t('vipDonations.page.nextStep1')}</p>
-                      <p>{t('vipDonations.page.nextStep2')}</p>
-                      <p>{t('vipDonations.page.nextStep3')}</p>
-                      <p>{t('vipDonations.page.nextStep4')}</p>
+                      {nextSteps.map((step) => (
+                        <p key={step}>{step}</p>
+                      ))}
                     </div>
                   </div>
                 </div>

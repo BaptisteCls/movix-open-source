@@ -64,6 +64,7 @@ import WishboardUserRequests from './pages/Greenlight/WishboardUserRequests';
 import SubmitLinkPage from './pages/Greenlight/SubmitLinkPage';
 import VipPage from './pages/VipPage';
 import VipDonatePage from './pages/VipDonatePage';
+import VipInvoicesPage from './pages/VipInvoicesPage';
 import VipInvoicePage from './pages/VipInvoicePage';
 import VipGiftPage from './pages/VipGiftPage';
 import WhatIsMovixPage from './pages/WhatIsMovixPage';
@@ -1445,6 +1446,7 @@ const AppWithIntro: React.FC = () => {
             {/* VIP Route */}
             <Route path="/vip" element={<VipPage />} />
             <Route path="/vip/don" element={<VipDonatePage />} />
+            <Route path="/vip/invoices" element={<VipInvoicesPage />} />
             <Route path="/vip/invoice/:publicId" element={<VipInvoicePage />} />
             <Route path="/vip/cadeau/:giftToken" element={<VipGiftPage />} />
             {/* What is Movix Route */}

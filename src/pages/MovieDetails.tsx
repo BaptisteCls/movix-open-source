@@ -1741,8 +1741,8 @@ const VideoPlayer = ({ movieId, backdropPath }: { movieId: string; backdropPath?
                   : 'bg-gray-800 hover:bg-gray-700'
                   }`}
               >
-                <div className="font-medium">{source.label || source.quality || `Source ${index + 1}`}</div>
-                <div className="text-xs opacity-75">{source.language || t('details.langFrench')} - M3U8</div>
+                <div className="font-medium">{source.label || source.quality || t('details.sourceLabel', { number: index + 1 })}</div>
+                <div className="text-xs opacity-75">{source.language || t('details.langFrench')} - {t('details.m3u8Label')}</div>
               </button>
             ))}
           </div>
@@ -1770,7 +1770,7 @@ const VideoPlayer = ({ movieId, backdropPath }: { movieId: string; backdropPath?
                 onClick={() => setM3u8Timeout(3000)} // Reset to default
                 className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 rounded"
               >
-                Reset
+                {t('common.reset')}
               </button>
             </div>
             <p className="text-xs text-gray-500 mt-1">
@@ -3043,7 +3043,7 @@ const MovieDetails = (): JSX.Element => {
                   whileHover={{ backgroundColor: "rgba(255,255,255,0.05)" }}
                   whileTap={{ backgroundColor: "rgba(255,255,255,0.1)" }}
                 >
-                  Images
+                  {t('details.imagesTab')}
                   {activeTab === 'images' && (
                     <motion.div
                       className="absolute bottom-0 left-0 right-0 h-0.5 bg-blue-600"
@@ -3692,7 +3692,7 @@ const MovieDetails = (): JSX.Element => {
                               <li>{t('details.boxOffice')}: <span className="text-gray-400">~40-60% {t('details.ofTotalRevenue')}</span></li>
                               <li>{t('details.vodStreaming')}: <span className="text-gray-400">~15-30% {t('details.ofTotalRevenue')}</span></li>
                               <li>{t('details.tvRights')}: <span className="text-gray-400">~10-20% {t('details.ofTotalRevenue')}</span></li>
-                              <li>DVD/Blu-ray: <span className="text-gray-400">~5-15% {t('details.ofTotalRevenue')}</span></li>
+                              <li>{t('details.dvdBluRay')}: <span className="text-gray-400">~5-15% {t('details.ofTotalRevenue')}</span></li>
                               <li>{t('details.merchandisingLabel')}: <span className="text-gray-400">{movie.belongs_to_collection ? t('details.potentiallyVeryHigh') : t('details.variableByMovie')}</span></li>
                             </ul>
                           </div>

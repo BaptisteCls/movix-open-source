@@ -42,6 +42,10 @@ export interface VipInvoice {
   giftPath: string | null;
   giftUrl: string | null;
   vipKey: string | null;
+  externalOrderId: string | null;
+  externalGateway: string | null;
+  externalAmount: number | null;
+  externalCurrency: string | null;
   supportTelegramUrl: string;
 }
 
@@ -75,6 +79,11 @@ export interface VipAdminInvoice extends VipInvoice {
   paidCoin: string | null;
   paidValue: number | null;
   paidTxid: string | null;
+  externalOrderId: string | null;
+  externalProductId: string | null;
+  externalGateway: string | null;
+  externalCurrency: string | null;
+  externalAmount: number | null;
   reason: string | null;
 }
 
@@ -93,9 +102,14 @@ interface JsonResponse<T> {
   error?: string;
   invoice?: T;
   gift?: T;
+  invoices?: T[];
 }
 
 const getAuthToken = () => localStorage.getItem('auth_token');
+
+type ApiError = Error & {
+  statusCode?: number;
+};
 
 function normalizeVipCoin(value: unknown): VipCoin | null {
   const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
@@ -121,8 +135,30 @@ function normalizeVipInvoice<T extends VipInvoice>(invoice: T): T {
   } as T;
 }
 
-async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${MAIN_API}${path}`, init);
+function mergeRequestHeaders(headers?: HeadersInit, options: { includeAuth?: boolean } = {}) {
+  const mergedHeaders = new Headers(headers);
+  const token = options.includeAuth ? getAuthToken() : null;
+
+  if (token && !mergedHeaders.has('Authorization')) {
+    mergedHeaders.set('Authorization', `Bearer ${token}`);
+  }
+
+  return mergedHeaders;
+}
+
+function createApiError(message: string, statusCode?: number): ApiError {
+  const error = new Error(message) as ApiError;
+  if (statusCode !== undefined) {
+    error.statusCode = statusCode;
+  }
+  return error;
+}
+
+async function requestJson<T>(path: string, init?: RequestInit, options: { includeAuth?: boolean } = {}): Promise<T> {
+  const response = await fetch(`${MAIN_API}${path}`, {
+    ...init,
+    headers: mergeRequestHeaders(init?.headers, options)
+  });
   const data = await response.json().catch(() => ({}));
 
   if (!response.ok) {
@@ -166,16 +202,42 @@ export async function createVipInvoice(
 }
 
 export async function getVipInvoice(publicId: string): Promise<VipInvoice> {
-  const data = await requestJson<JsonResponse<VipInvoice>>(`/api/vip/invoices/${encodeURIComponent(publicId)}`);
+  const data = await requestJson<JsonResponse<VipInvoice>>(
+    `/api/vip/invoices/${encodeURIComponent(publicId)}`,
+    undefined,
+    { includeAuth: true }
+  );
   if (!data.invoice) {
-    throw new Error('Invoice introuvable');
+    throw createApiError('Invoice introuvable', 404);
   }
   return normalizeVipInvoice(data.invoice);
 }
 
+export async function listMyVipInvoices(limit = 30): Promise<VipInvoice[]> {
+  const token = getAuthToken();
+  if (!token) {
+    return [];
+  }
+
+  const query = new URLSearchParams({
+    limit: String(limit)
+  });
+
+  const data = await requestJson<JsonResponse<VipInvoice>>(
+    `/api/vip/invoices/mine?${query.toString()}`,
+    undefined,
+    { includeAuth: true }
+  );
+
+  return Array.isArray(data.invoices)
+    ? data.invoices.map((invoice) => normalizeVipInvoice(invoice))
+    : [];
+}
+
 export async function checkVipInvoice(publicId: string): Promise<VipInvoice> {
   const response = await fetch(`${MAIN_API}/api/vip/invoices/${encodeURIComponent(publicId)}/check`, {
-    method: 'POST'
+    method: 'POST',
+    headers: mergeRequestHeaders(undefined, { includeAuth: true })
   });
   const data = await response.json().catch(() => ({}));
 
@@ -184,7 +246,7 @@ export async function checkVipInvoice(publicId: string): Promise<VipInvoice> {
   }
 
   if (!data.invoice) {
-    throw new Error('Invoice introuvable');
+    throw createApiError('Invoice introuvable', 404);
   }
 
   return normalizeVipInvoice(data.invoice as VipInvoice);

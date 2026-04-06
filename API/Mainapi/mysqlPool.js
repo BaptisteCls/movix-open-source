@@ -16,6 +16,8 @@ const dbConfig = {
   enableKeepAlive: true,
   keepAliveInitialDelay: 10000
 };
+const SCHEMA_BOOTSTRAP_LOCK_NAME = 'mainapi:schema-bootstrap:v1';
+const DEFAULT_LOCK_TIMEOUT_SECONDS = 180;
 
 // Pool de connexions MySQL partagé — single instance per worker
 let pool = null;
@@ -58,9 +60,49 @@ const getPool = () => {
   return pool;
 };
 
+async function withMysqlAdvisoryLock(poolInstance, lockName, task, options = {}) {
+  if (!poolInstance) {
+    throw new Error('MySQL pool not ready for advisory lock');
+  }
+
+  if (typeof task !== 'function') {
+    throw new Error('withMysqlAdvisoryLock requires a task function');
+  }
+
+  const timeoutSeconds = Math.max(
+    1,
+    parseInt(options.timeoutSeconds || DEFAULT_LOCK_TIMEOUT_SECONDS, 10) || DEFAULT_LOCK_TIMEOUT_SECONDS
+  );
+  const connection = await poolInstance.getConnection();
+  let lockAcquired = false;
+
+  try {
+    const [rows] = await connection.query('SELECT GET_LOCK(?, ?) AS acquired', [lockName, timeoutSeconds]);
+    const acquired = Array.isArray(rows) && rows[0] ? Number(rows[0].acquired) : 0;
+
+    if (acquired !== 1) {
+      throw new Error(`Timeout while waiting for MySQL lock "${lockName}"`);
+    }
+
+    lockAcquired = true;
+    return await task();
+  } finally {
+    if (lockAcquired) {
+      try {
+        await connection.query('SELECT RELEASE_LOCK(?) AS released', [lockName]);
+      } catch (error) {
+        console.warn(`⚠️ Failed to release MySQL lock "${lockName}":`, error.message);
+      }
+    }
+
+    connection.release();
+  }
+}
+
 module.exports = {
   initPool,
   getPool,
-  dbConfig
+  dbConfig,
+  SCHEMA_BOOTSTRAP_LOCK_NAME,
+  withMysqlAdvisoryLock
 };
-

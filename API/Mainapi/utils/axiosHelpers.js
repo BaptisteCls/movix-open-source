@@ -79,6 +79,9 @@ const summarizeRequestErrorForLog = (error) => {
 const BYPASS403_SERVER_URL = String(process.env.BYPASS403_SERVER_URL || '')
   .trim()
   .replace(/\/+$/, '');
+const DARKIWORLD_BASE_URL = String(process.env.DARKIWORLD_BASE_URL || 'https://darkiworld2026.com')
+  .trim()
+  .replace(/\/+$/, '');
 
 function buildBypass403RequestUrl(targetUrl) {
   if (!BYPASS403_SERVER_URL) {
@@ -104,7 +107,7 @@ const proxyManager = require('./proxyManager');
 
 // Fonction utilitaire pour g\u00e9n\u00e9rer le referer dynamiquement
 function generateDarkiReferer(url) {
-  const baseUrl = 'https://darkiworld2026.com';
+  const baseUrl = DARKIWORLD_BASE_URL;
 
   if (url.includes('/season/') && url.includes('/episode/') && url.includes('/download')) {
     // Pour les \u00e9pisodes de s\u00e9ries: /titles/{titleId}/season/{seasonId}/episode/{episodeId}/download
@@ -141,7 +144,7 @@ async function axiosDarkinoRequest(config) {
     throw error;
   }
 
-  const requestUrl = `https://darkiworld2026.com${config.url}`;
+  const requestUrl = `${DARKIWORLD_BASE_URL}${config.url}`;
 
   // G\u00e9n\u00e9rer le referer dynamiquement selon l'URL
   const dynamicReferer = generateDarkiReferer(config.url);
@@ -167,14 +170,14 @@ async function axiosDarkinoRequest(config) {
 
       const setCookieHeader = response.headers['set-cookie'];
       if (setCookieHeader && deps.cookieJar) {
-        await Promise.all(setCookieHeader.map(cookie => deps.cookieJar.setCookie(cookie, 'https://darkiworld2026.com')));
+        await Promise.all(setCookieHeader.map(cookie => deps.cookieJar.setCookie(cookie, DARKIWORLD_BASE_URL)));
       }
       return response;
     } catch (error) {
       console.error(`[DARKINO REQUEST][DIRECT ERROR] ${String(config.method || 'get').toUpperCase()} ${config.url}`, summarizeRequestErrorForLog(error));
       if (error.response && error.response.headers['set-cookie'] && deps.cookieJar) {
         const setCookieHeader = error.response.headers['set-cookie'];
-        await Promise.all(setCookieHeader.map(cookie => deps.cookieJar.setCookie(cookie, 'https://darkiworld2026.com')));
+        await Promise.all(setCookieHeader.map(cookie => deps.cookieJar.setCookie(cookie, DARKIWORLD_BASE_URL)));
       }
       // En cas d'erreur 403, activer le cooldown
       if (error.response?.status === 403) {
@@ -218,7 +221,7 @@ async function axiosDarkinoRequest(config) {
       // Mettre \u00e0 jour le cookieJar avec la r\u00e9ponse
       const setCookieHeader = response.headers['set-cookie'];
       if (setCookieHeader && deps.cookieJar) {
-        await Promise.all(setCookieHeader.map(cookie => deps.cookieJar.setCookie(cookie, 'https://darkiworld2026.com')));
+        await Promise.all(setCookieHeader.map(cookie => deps.cookieJar.setCookie(cookie, DARKIWORLD_BASE_URL)));
       }
       return response;
     } catch (error) {
@@ -233,7 +236,7 @@ async function axiosDarkinoRequest(config) {
       // Mettre \u00e0 jour les cookies m\u00eame en cas d'erreur si le header est pr\u00e9sent
       if (error.response && error.response.headers['set-cookie'] && deps.cookieJar) {
         const setCookieHeader = error.response.headers['set-cookie'];
-        await Promise.all(setCookieHeader.map(cookie => deps.cookieJar.setCookie(cookie, 'https://darkiworld2026.com')));
+        await Promise.all(setCookieHeader.map(cookie => deps.cookieJar.setCookie(cookie, DARKIWORLD_BASE_URL)));
       }
 
       // En cas d'erreur 429 (Too Many Requests), essayer avec le prochain proxy si disponible

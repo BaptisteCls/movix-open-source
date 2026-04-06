@@ -13,7 +13,9 @@ declare global {
 }
 
 interface TurnstileWidgetProps {
-  onTokenChange: (token: string) => void;
+  onTokenChange?: (token: string) => void;
+  onVerify?: (token: string) => void;
+  siteKey?: string;
   resetSignal?: number;
   className?: string;
   theme?: 'light' | 'dark' | 'auto';
@@ -22,6 +24,8 @@ interface TurnstileWidgetProps {
 
 const TurnstileWidget: React.FC<TurnstileWidgetProps> = ({
   onTokenChange,
+  onVerify,
+  siteKey,
   resetSignal = 0,
   className,
   theme = 'dark',
@@ -29,10 +33,12 @@ const TurnstileWidget: React.FC<TurnstileWidgetProps> = ({
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const widgetIdRef = useRef<string | null>(null);
+  const resolvedSiteKey = siteKey || TURNSTILE_SITE_KEY;
+  const handleTokenChange = onTokenChange || onVerify || null;
 
   useEffect(() => {
-    if (!TURNSTILE_SITE_KEY) {
-      onTokenChange('');
+    if (!resolvedSiteKey) {
+      handleTokenChange?.('');
       return undefined;
     }
 
@@ -44,12 +50,12 @@ const TurnstileWidget: React.FC<TurnstileWidgetProps> = ({
       }
 
       widgetIdRef.current = window.turnstile.render(containerRef.current, {
-        sitekey: TURNSTILE_SITE_KEY,
+        sitekey: resolvedSiteKey,
         theme,
         ...(action ? { action } : {}),
-        callback: (token: string) => onTokenChange(token),
-        'expired-callback': () => onTokenChange(''),
-        'error-callback': () => onTokenChange('')
+        callback: (token: string) => handleTokenChange?.(token),
+        'expired-callback': () => handleTokenChange?.(''),
+        'error-callback': () => handleTokenChange?.('')
       });
     };
 
@@ -71,7 +77,7 @@ const TurnstileWidget: React.FC<TurnstileWidgetProps> = ({
         isMounted = false;
         window.clearInterval(interval);
         window.clearTimeout(timeout);
-        onTokenChange('');
+        handleTokenChange?.('');
         if (widgetIdRef.current && window.turnstile) {
           try {
             window.turnstile.remove(widgetIdRef.current);
@@ -85,7 +91,7 @@ const TurnstileWidget: React.FC<TurnstileWidgetProps> = ({
 
     return () => {
       isMounted = false;
-      onTokenChange('');
+      handleTokenChange?.('');
       if (widgetIdRef.current && window.turnstile) {
         try {
           window.turnstile.remove(widgetIdRef.current);
@@ -95,16 +101,16 @@ const TurnstileWidget: React.FC<TurnstileWidgetProps> = ({
       }
       widgetIdRef.current = null;
     };
-  }, [action, onTokenChange, theme]);
+  }, [action, handleTokenChange, resolvedSiteKey, theme]);
 
   useEffect(() => {
-    onTokenChange('');
+    handleTokenChange?.('');
     if (widgetIdRef.current && window.turnstile) {
       window.turnstile.reset(widgetIdRef.current);
     }
-  }, [onTokenChange, resetSignal]);
+  }, [handleTokenChange, resetSignal]);
 
-  if (!TURNSTILE_SITE_KEY) {
+  if (!resolvedSiteKey) {
     return null;
   }
 

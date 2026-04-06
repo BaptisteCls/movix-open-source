@@ -165,7 +165,7 @@ const WatchPartyJoin: React.FC = () => {
                   value={roomCode}
                   onChange={handleCodeChange}
                   maxLength={6}
-                  placeholder="CODE"
+                  placeholder={t('watchParty.code')}
                   className="w-full px-4 py-4 bg-white/5 border border-white/10 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 tracking-[0.5em] uppercase font-mono text-center text-xl text-white placeholder-white/20 transition-all"
                   autoComplete="off"
                 />

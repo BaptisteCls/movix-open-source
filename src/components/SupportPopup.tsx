@@ -18,7 +18,7 @@ const SupportPopup: React.FC = () => {
             <button 
               onClick={hidePopup}
               className="text-gray-500 hover:text-white transition-colors rounded-full p-1 hover:bg-white/10"
-              aria-label="Close"
+              aria-label={t('common.close')}
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />

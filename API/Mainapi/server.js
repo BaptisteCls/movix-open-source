@@ -99,7 +99,7 @@ if (cluster.isPrimary ?? cluster.isMaster) {
 process.env.UV_THREADPOOL_SIZE = 8; // 8 threads libuv par worker (6 workers x 8 = 48 threads total)
 
 const http = require('http');
-const { app } = require('./app');
+const { app, appReady } = require('./app');
 const { redis } = require('./config/redis');
 const { shutdownCycleTLS, refreshProxyScrapeProxies } = require('./utils/proxyManager');
 const { getPool } = require('./mysqlPool');
@@ -110,6 +110,19 @@ const PORT = 25565;
 // startServer — create HTTP server with retry logic
 // ---------------------------------------------------------------------------
 const startServer = async (retries = 3) => {
+  try {
+    await appReady;
+  } catch (error) {
+    if (retries > 0) {
+      console.error(`[BOOTSTRAP] Échec avant listen: ${error.message}`);
+      console.log(`Redémarrage... (${retries} restantes)`);
+      return setTimeout(() => startServer(retries - 1), 5000);
+    }
+
+    console.error('Échec du bootstrap applicatif après plusieurs tentatives');
+    process.exit(1);
+  }
+
   try {
     await refreshProxyScrapeProxies({ force: false, silent: false });
   } catch (error) {

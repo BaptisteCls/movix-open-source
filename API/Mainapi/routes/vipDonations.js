@@ -12,6 +12,7 @@ const {
   fetchInvoiceByPublicId,
   fetchInvoiceByGiftToken,
   getVipInvoiceDetails,
+  listUserVipInvoices,
   listVipInvoices,
   refreshInvoiceStatus,
   forceValidateInvoice,
@@ -25,6 +26,14 @@ const {
 } = require('../utils/vipDonations');
 
 const router = express.Router();
+
+const canAccessInvoice = (invoice, auth) => {
+  if (!invoice) {
+    return false;
+  }
+
+  return true;
+};
 
 const getRateLimitKey = (req) => req.headers['cf-connecting-ip']
   || req.headers['x-forwarded-for']?.split(',')[0].trim()
@@ -118,7 +127,7 @@ router.post('/vip/invoices', createInvoiceRateLimit, async (req, res) => {
     });
   } catch (error) {
     console.error('VIP invoice create error:', error);
-    return res.status(400).json({
+    return res.status(error.statusCode || 400).json({
       success: false,
       error: error.message || 'Impossible de créer l\'invoice VIP'
     });
@@ -143,11 +152,40 @@ router.get('/vip/paygate/callback', async (req, res) => {
   }
 });
 
+router.get('/vip/invoices/mine', async (req, res) => {
+  try {
+    const auth = await getAuthIfValid(req);
+    if (!auth) {
+      return res.status(401).json({
+        success: false,
+        error: 'Authentification requise'
+      });
+    }
+
+    const pool = getPool();
+    const invoices = await listUserVipInvoices(pool, auth, {
+      limit: req.query?.limit
+    });
+
+    return res.json({
+      success: true,
+      invoices
+    });
+  } catch (error) {
+    console.error('VIP user invoices list error:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Impossible de récupérer tes invoices VIP'
+    });
+  }
+});
+
 router.get('/vip/invoices/:publicId', async (req, res) => {
   try {
     const pool = getPool();
+    const auth = await getAuthIfValid(req);
     const invoice = await fetchInvoiceByPublicId(pool, req.params.publicId);
-    if (!invoice) {
+    if (!canAccessInvoice(invoice, auth)) {
       return res.status(404).json({
         success: false,
         error: 'Invoice introuvable'
@@ -170,8 +208,9 @@ router.get('/vip/invoices/:publicId', async (req, res) => {
 router.post('/vip/invoices/:publicId/check', invoiceCheckRateLimit, async (req, res) => {
   try {
     const pool = getPool();
+    const auth = await getAuthIfValid(req);
     const invoice = await fetchInvoiceByPublicId(pool, req.params.publicId);
-    if (!invoice) {
+    if (!canAccessInvoice(invoice, auth)) {
       return res.status(404).json({
         success: false,
         error: 'Invoice introuvable'
@@ -190,11 +229,12 @@ router.post('/vip/invoices/:publicId/check', invoiceCheckRateLimit, async (req, 
   } catch (error) {
     console.error('VIP invoice check error:', error);
     const pool = getPool();
+    const auth = await getAuthIfValid(req);
     const invoice = await fetchInvoiceByPublicId(pool, req.params.publicId);
     return res.status(502).json({
       success: false,
-      error: 'Vérification blockchain indisponible temporairement',
-      invoice: serializePublicInvoice(invoice)
+      error: 'Vérification de paiement indisponible temporairement',
+      invoice: canAccessInvoice(invoice, auth) ? serializePublicInvoice(invoice) : null
     });
   }
 });
@@ -336,7 +376,7 @@ router.post('/admin/vip-invoices/:id/check', isAdmin, async (req, res) => {
     console.error('VIP admin invoice check error:', error);
     return res.status(502).json({
       success: false,
-      error: 'Vérification blockchain indisponible temporairement'
+      error: 'Vérification de paiement indisponible temporairement'
     });
   }
 });

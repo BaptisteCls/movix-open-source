@@ -406,7 +406,7 @@ const CreateAccount: React.FC<CreateAccountProps> = ({ mode = 'create' }) => {
           >
             <img
               src={selectedAvatar || 'https://as2.ftcdn.net/v2/jpg/05/89/93/27/1000_F_589932782_vQAEAZhHnq1QCGu5ikwrYaQD0Mmurm0N.webp'}
-              alt="Avatar"
+              alt={t('common.avatar')}
               className="w-full h-full object-cover"
             />
           </motion.div>

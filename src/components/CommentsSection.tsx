@@ -70,6 +70,7 @@ interface SpoilerToggleProps {
 }
 
 const SpoilerToggle: React.FC<SpoilerToggleProps> = ({ checked, onChange, size = 'md' }) => {
+  const { t } = useTranslation();
   const sizeClasses = size === 'sm' ? 'text-xs px-3 py-1.5' : 'text-sm px-4 py-2';
   const iconSize = size === 'sm' ? 'w-3 h-3' : 'w-4 h-4';
 
@@ -83,7 +84,7 @@ const SpoilerToggle: React.FC<SpoilerToggleProps> = ({ checked, onChange, size =
         } ${sizeClasses}`}
     >
       <AlertTriangle className={iconSize} />
-      <span>Spoiler</span>
+        <span>{t('common.spoiler')}</span>
       {checked && (
         <motion.div
           initial={{ scale: 0 }}
@@ -1099,9 +1100,7 @@ const CommentsSection: React.FC<CommentsSectionProps> = ({ contentType, contentI
               {/* Widget Turnstile */}
               {TURNSTILE_SITE_KEY && (
                 <div className="mt-4">
-                  <p className="text-xs text-gray-400 mb-2">
-                    Pour lutter contre les bots et le spam, veuillez compléter cette vérification avant chaque commentaire ou réponse.
-                  </p>
+                  <p className="text-xs text-gray-400 mb-2">{t('comments.turnstileNotice')}</p>
                   <div className="overflow-hidden w-full" style={{ maxWidth: '100%' }}>
                     <div ref={turnstileRef} className="origin-left scale-[0.85] sm:scale-100" />
                   </div>
@@ -1288,7 +1287,7 @@ const CommentsSection: React.FC<CommentsSectionProps> = ({ contentType, contentI
                         >
                           <AlertTriangle className="w-3 h-3" />
                           <span className="hidden sm:inline">{t('comments.spoilerContent')}</span>
-                          <span className="sm:hidden">Spoiler</span>
+                                                <span className="sm:hidden">{t('common.spoiler')}</span>
                         </motion.span>
                       )}
                     </div>
@@ -1605,7 +1604,7 @@ const CommentsSection: React.FC<CommentsSectionProps> = ({ contentType, contentI
                                         >
                                           <AlertTriangle className="w-2.5 h-2.5 sm:w-3 sm:h-3" />
                                           <span className="hidden sm:inline">{t('comments.spoilerContent')}</span>
-                                          <span className="sm:hidden">Spoiler</span>
+                                                            <span className="sm:hidden">{t('common.spoiler')}</span>
                                         </motion.span>
                                       )}
                                     </div>

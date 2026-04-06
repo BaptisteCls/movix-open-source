@@ -287,10 +287,10 @@ const AdminSharedLists: React.FC = () => {
                                                     <div>
                                                         <div className="flex items-center gap-1">
                                                             <p className="font-medium text-white">{list.username}</p>
-                                                            {list.isVip && <span title="VIP" className="text-amber-400 text-xs">⭐</span>}
+                                                            {list.isVip && <span title={t('admin.vipLabel')} className="text-amber-400 text-xs">⭐</span>}
                                                         </div>
                                                         <p className="text-[10px] text-white/30 truncate max-w-[100px]" title={list.userId}>
-                                                            ID: {list.userId.substring(0, 8)}...
+                                                            {t('admin.idLabel')}: {list.userId.substring(0, 8)}...
                                                         </p>
                                                     </div>
                                                 </div>
@@ -302,9 +302,9 @@ const AdminSharedLists: React.FC = () => {
                                                     <p className="text-sm font-medium text-white">{list.listName}</p>
                                                     <div className="flex items-center gap-2">
                                                         <Badge variant="secondary" className="text-[10px] py-0 h-4">
-                                                            {list.itemCount} élément{list.itemCount > 1 ? 's' : ''}
+                                                            {t('lists.itemsInList', { count: list.itemCount })}
                                                         </Badge>
-                                                        <span className="text-[10px] text-white/30">Code: {list.shareCode}</span>
+                                                        <span className="text-[10px] text-white/30">{t('watchParty.code')}: {list.shareCode}</span>
                                                     </div>
                                                 </div>
                                             </td>
@@ -341,7 +341,7 @@ const AdminSharedLists: React.FC = () => {
                                                                 <Badge variant="rejected" className="bg-red-500/20 text-red-400 border-red-500/30 w-fit">
                                                                     {list.moderationReason}
                                                                 </Badge>
-                                                                <span className="text-[10px] text-white/40">par Gemini AI</span>
+                                                                <span className="text-[10px] text-white/40">{t('admin.generatedByGemini')}</span>
                                                                 {list.moderationDetails && (
                                                                     <p className="text-xs text-white/60 bg-white/5 p-2 rounded border border-white/5">
                                                                         <Sparkles className="h-3 w-3 inline mr-1 text-amber-400" />
@@ -362,7 +362,7 @@ const AdminSharedLists: React.FC = () => {
                                                     <div className="space-y-1">
                                                         <span className="text-white/50 text-xs line-through">{formatDate(list.createdAt)}</span>
                                                         <p className="text-amber-400/80 text-[10px]">
-                                                            {t('admin.moderatedOn')} {list.moderatedAt ? formatDate(list.moderatedAt) : 'N/A'}
+                                                            {t('admin.moderatedOn')} {list.moderatedAt ? formatDate(list.moderatedAt) : t('common.notAvailable')}
                                                         </p>
                                                     </div>
                                                 )}
@@ -470,7 +470,7 @@ const AdminSharedLists: React.FC = () => {
                         <div className="bg-white/5 p-3 rounded-lg border border-white/10 space-y-2">
                             <p className="text-xs text-white/50">{t('admin.listBy')} <span className="text-white font-medium">{selectedList.username}</span></p>
                             <p className="text-sm font-medium text-white">"{selectedList.listName}"</p>
-                            <p className="text-xs text-white/40">{selectedList.itemCount} élément{selectedList.itemCount > 1 ? 's' : ''} · Code: {selectedList.shareCode}</p>
+                            <p className="text-xs text-white/40">{t('lists.itemsInList', { count: selectedList.itemCount })} · {t('watchParty.code')}: {selectedList.shareCode}</p>
                             {selectedList.moderationReason && (
                                 <div className="flex items-center gap-2 mt-2">
                                     <Badge variant="rejected" className="bg-red-500/20 text-red-400 border-red-500/30">

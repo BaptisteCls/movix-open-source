@@ -95,9 +95,34 @@ export interface WrappedData {
     topPages: { page: string; minutes: number }[];
 }
 
+export interface WrappedProgress {
+    isEligible: boolean;
+    completionPercent: number;
+    missingCriteriaCount: number;
+    requirements: {
+        minutes: number;
+        uniqueTitles: number;
+        sessions: number;
+        activeDays: number;
+    };
+    current: {
+        minutes: number;
+        uniqueTitles: number;
+        sessions: number;
+        activeDays: number;
+    };
+    missing: {
+        minutes: number;
+        uniqueTitles: number;
+        sessions: number;
+        activeDays: number;
+    };
+}
+
 export interface WrappedResponse {
     success: boolean;
     wrapped: WrappedData | null;
+    progress?: WrappedProgress | null;
     message?: string;
     error?: string;
 }

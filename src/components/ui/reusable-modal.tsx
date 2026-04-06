@@ -50,6 +50,7 @@ const ReusableModal: React.FC<ReusableModalProps> = ({
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
                     transition={{ duration: 0.3 }}
+                    data-lenis-prevent
                     className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-[100000]"
                     onClick={(e) => {
                         if (e.target === e.currentTarget) handleClose();
@@ -60,6 +61,7 @@ const ReusableModal: React.FC<ReusableModalProps> = ({
                         animate={{ scale: 1, opacity: 1 }}
                         exit={{ scale: 0.95, opacity: 0 }}
                         transition={{ duration: 0.3 }}
+                        data-lenis-prevent
                         className={`bg-gray-900 border border-white/10 rounded-2xl w-full max-h-[90vh] overflow-hidden flex flex-col shadow-2xl ${className}`}
                     >
                         {/* Header */}

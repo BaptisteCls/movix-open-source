@@ -133,7 +133,7 @@ const AdFreePlayerAds: React.FC<AdFreePlayerAdsProps> = ({ onClose, onAccept, ad
               className="absolute right-4 top-4 rounded-full p-1.5 text-white/50 transition-all duration-200 hover:bg-white/10 hover:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/50"
             >
               <X className="h-4 w-4" />
-              <span className="sr-only">Fermer</span>
+                        <span className="sr-only">{t('common.close')}</span>
             </DialogPrimitive.Close>
           )}
 

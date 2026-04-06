@@ -1140,10 +1140,10 @@ const Collections: React.FC = () => {
                     ? 'bg-red-500 text-white shadow-lg'
                     : 'text-gray-400 hover:text-white hover:bg-white/10'
                 }`}
-                title="Mode Cards"
+                title={t('search.gridView')}
               >
                 <Grid size={18} />
-                <span className="hidden sm:inline">Cards</span>
+                <span className="hidden sm:inline">{t('search.gridView')}</span>
               </button>
               <button
                 onClick={() => setDisplayMode('list')}

@@ -883,7 +883,7 @@ const CineGraphPage: React.FC = () => {
                   const zoom = graphRef.current?.zoom();
                   if (zoom) graphRef.current?.zoom(zoom * 1.5, 300);
                 }}
-                title="Zoom +"
+                title={t('cinegraph.zoomIn')}
               >
                 <ZoomIn size={14} />
               </button>
@@ -893,7 +893,7 @@ const CineGraphPage: React.FC = () => {
                   const zoom = graphRef.current?.zoom();
                   if (zoom) graphRef.current?.zoom(zoom / 1.5, 300);
                 }}
-                title="Zoom -"
+                title={t('cinegraph.zoomOut')}
               >
                 <ZoomOut size={14} />
               </button>
@@ -1003,7 +1003,7 @@ const CineGraphPage: React.FC = () => {
                     onClick={() => navigate(`/${selectedNode.type}/${encodeId(selectedNode.tmdbId)}`)}
                   >
                     <Eye size={16} />
-                    Voir la fiche
+                    {t('cinegraph.viewRecord')}
                   </button>
                 )}
                 {selectedNode.type === 'person' && (
@@ -1012,7 +1012,7 @@ const CineGraphPage: React.FC = () => {
                     onClick={() => navigate(`/person/${selectedNode.tmdbId}`)}
                   >
                     <User size={16} />
-                    Voir le profil
+                    {t('cinegraph.viewProfile')}
                   </button>
                 )}
                 {(selectedNode.type === 'movie' || selectedNode.type === 'tv' || selectedNode.type === 'person') && (

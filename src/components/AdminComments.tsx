@@ -422,7 +422,7 @@ const AdminComments: React.FC = () => {
             const authToken = localStorage.getItem('auth_token');
             const banValue = banType === 'ip' ? banTarget.ip_address : banTarget.user_id;
             if (banType === 'ip' && !banValue) {
-                toast.error('IP inconnue pour ce commentaire');
+                toast.error(t('admin.commentUnknownIp'));
                 setSubmitting(false);
                 return;
             }
@@ -455,7 +455,7 @@ const AdminComments: React.FC = () => {
             }
         } catch (error) {
             console.error('Error banning user:', error);
-            toast.error('Erreur lors du bannissement');
+            toast.error(t('admin.banError'));
         } finally {
             setSubmitting(false);
         }
@@ -479,7 +479,7 @@ const AdminComments: React.FC = () => {
             }
         } catch (error) {
             console.error('Error unbanning:', error);
-            toast.error('Erreur lors du débannissement');
+            toast.error(t('admin.unbanError'));
         }
     };
 
@@ -502,7 +502,7 @@ const AdminComments: React.FC = () => {
             }
         } catch (error) {
             console.error('Error unbanning all:', error);
-            toast.error('Erreur');
+            toast.error(t('admin.genericError'));
         }
     };
 
@@ -529,7 +529,7 @@ const AdminComments: React.FC = () => {
             }
         } catch (error) {
             console.error('Error deleting all by user:', error);
-            toast.error('Erreur');
+            toast.error(t('admin.genericError'));
         } finally {
             setSubmitting(false);
         }
@@ -594,7 +594,7 @@ const AdminComments: React.FC = () => {
             }
         } catch (error) {
             console.error('Error deleting duplicates:', error);
-            toast.error('Erreur');
+            toast.error(t('admin.genericError'));
         } finally {
             setSubmitting(false);
         }
@@ -630,7 +630,7 @@ const AdminComments: React.FC = () => {
             }
         } catch (error) {
             console.error('Error deleting all duplicates:', error);
-            toast.error('Erreur');
+            toast.error(t('admin.genericError'));
         } finally {
             setSubmitting(false);
         }
@@ -775,11 +775,11 @@ const AdminComments: React.FC = () => {
                         <div>
                             <div className="flex items-center gap-1">
                                 <p className="font-medium text-white">{comment.username}</p>
-                                {!!comment.is_vip && <span title="VIP" className="text-amber-400 text-[10px] font-semibold">VIP</span>}
-                                {!!comment.is_admin && <span title="Admin" className="text-red-500 text-[10px] font-semibold">ADM</span>}
+                                {!!comment.is_vip && <span title={t('admin.vipLabel')} className="text-amber-400 text-[10px] font-semibold">{t('admin.vipLabel')}</span>}
+                                {!!comment.is_admin && <span title={t('admin.adminLabel')} className="text-red-500 text-[10px] font-semibold">{t('admin.adminLabel')}</span>}
                             </div>
                             <p className="text-[10px] text-white/30 truncate max-w-[100px]" title={comment.user_id}>
-                                ID: {comment.user_id.substring(0, 8)}...
+                                {t('admin.idLabel')}: {comment.user_id.substring(0, 8)}...
                             </p>
                         </div>
                     </div>
@@ -816,7 +816,7 @@ const AdminComments: React.FC = () => {
                                     <Badge variant="rejected" className="bg-red-500/20 text-red-400 border-red-500/30">
                                         {comment.moderation_reason}
                                     </Badge>
-                                    <span className="text-[10px] text-white/40">par Gemini AI</span>
+                                    <span className="text-[10px] text-white/40">{t('admin.generatedByGemini')}</span>
                                 </div>
                                 {comment.moderation_details && (
                                     <p className="text-xs text-white/60 bg-white/5 p-2 rounded border border-white/5">
@@ -843,7 +843,7 @@ const AdminComments: React.FC = () => {
                         </div>
                         <div className="flex items-center gap-2">
                             {!!comment.is_spoiler && (
-                                <Badge variant="rejected" className="text-[8px] py-0 h-3">SPOILER</Badge>
+                                <Badge variant="rejected" className="text-[8px] py-0 h-3">{t('common.spoiler')}</Badge>
                             )}
                             {activeTab === 'moderated' && comment.item_type === 'reply' && (
                                 <Badge variant="secondary" className="text-[8px] py-0 h-3">{t('admin.reply')}</Badge>
@@ -861,7 +861,7 @@ const AdminComments: React.FC = () => {
                         <div className="space-y-0.5">
                             <span className="text-white/50 text-[11px] line-through block">{formatDate(comment.created_at)}</span>
                             <span className="text-amber-400/80 text-[10px] block">
-                                {comment.moderated_at ? formatDate(comment.moderated_at) : 'N/A'}
+                                {comment.moderated_at ? formatDate(comment.moderated_at) : t('common.notAvailable')}
                             </span>
                         </div>
                     )}
@@ -870,7 +870,7 @@ const AdminComments: React.FC = () => {
                     <td className="p-4">
                         <div className="flex items-center gap-1">
                             <span className="text-white/70 text-sm">{comment.reaction_count}</span>
-                            <span className="text-xs text-white/30">Like</span>
+                            <span className="text-xs text-white/30">{t('common.like')}</span>
                         </div>
                     </td>
                 )}
@@ -1231,11 +1231,11 @@ const AdminComments: React.FC = () => {
                                                         <div>
                                                             <div className="flex items-center gap-1">
                                                                 <p className="font-medium text-white">{comment.username}</p>
-                                                                {!!comment.is_vip && <span title="VIP" className="text-amber-400 text-xs">⭐</span>}
-                                                                {!!comment.is_admin && <span title="Admin" className="text-red-500 text-xs">🛡️</span>}
+                                                                {!!comment.is_vip && <span title={t('admin.vipLabel')} className="text-amber-400 text-xs">⭐</span>}
+                                                                {!!comment.is_admin && <span title={t('admin.adminLabel')} className="text-red-500 text-xs">🛡️</span>}
                                                             </div>
                                                             <p className="text-[10px] text-white/30 truncate max-w-[100px]" title={comment.user_id}>
-                                                                ID: {comment.user_id.substring(0, 8)}...
+                                                                {t('admin.idLabel')}: {comment.user_id.substring(0, 8)}...
                                                             </p>
                                                         </div>
                                                     </div>
@@ -1272,7 +1272,7 @@ const AdminComments: React.FC = () => {
                                                                     <Badge variant="rejected" className="bg-red-500/20 text-red-400 border-red-500/30">
                                                                         {comment.moderation_reason}
                                                                     </Badge>
-                                                                    <span className="text-[10px] text-white/40">par Gemini AI</span>
+                                                                    <span className="text-[10px] text-white/40">{t('admin.generatedByGemini')}</span>
                                                                 </div>
                                                                 {comment.moderation_details && (
                                                                     <p className="text-xs text-white/60 bg-white/5 p-2 rounded border border-white/5">
@@ -1299,7 +1299,7 @@ const AdminComments: React.FC = () => {
                                                         </div>
                                                         <div className="flex items-center gap-2">
                                                             {!!comment.is_spoiler && (
-                                                                <Badge variant="rejected" className="text-[8px] py-0 h-3">SPOILER</Badge>
+                                                                <Badge variant="rejected" className="text-[8px] py-0 h-3">{t('common.spoiler')}</Badge>
                                                             )}
                                                             {activeTab === 'moderated' && comment.item_type === 'reply' && (
                                                                 <Badge variant="secondary" className="text-[8px] py-0 h-3">{t('admin.reply')}</Badge>
@@ -1486,9 +1486,9 @@ const AdminComments: React.FC = () => {
                             )}
                             <div>
                                 <p className="text-sm text-white font-medium">{banTarget.username}</p>
-                                <p className="text-[10px] text-white/30">ID: {banTarget.user_id}</p>
+                                <p className="text-[10px] text-white/30">{t('admin.idLabel')}: {banTarget.user_id}</p>
                                 {banTarget.ip_address && (
-                                    <p className="text-[10px] text-white/30">IP: {banTarget.ip_address}</p>
+                                    <p className="text-[10px] text-white/30">{t('admin.ipLabel')}: {banTarget.ip_address}</p>
                                 )}
                             </div>
                         </div>
@@ -1520,7 +1520,7 @@ const AdminComments: React.FC = () => {
                             >
                                 <Shield className="h-4 w-4 inline mr-2" />
                                 {t('admin.banByIp')}
-                                {!banTarget?.ip_address && <span className="text-[9px] block text-white/20 mt-0.5">IP non disponible</span>}
+                                {!banTarget?.ip_address && <span className="text-[9px] block text-white/20 mt-0.5">{t('admin.ipUnavailable')}</span>}
                             </button>
                         </div>
                     </div>

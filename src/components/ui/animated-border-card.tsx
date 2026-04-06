@@ -105,6 +105,16 @@ const observeAnimatedCard = (card: HTMLElement) => {
     };
 };
 
+const syncCardBorderOrbitSize = (card: HTMLElement, width: number, height: number) => {
+    const largestSide = Math.max(width, height);
+
+    if (!Number.isFinite(largestSide) || largestSide <= 0) {
+        return;
+    }
+
+    card.style.setProperty('--border-orbit-size', `${Math.ceil(largestSide * 2)}px`);
+};
+
 const shallowEqualStyle = (
     previousStyle?: React.CSSProperties,
     nextStyle?: React.CSSProperties
@@ -200,6 +210,43 @@ const AnimatedBorderCardComponent = ({
 
         return observeAnimatedCard(container);
     }, [shouldAnimate]);
+
+    useEffect(() => {
+        const container = containerRef.current;
+        if (!container) {
+            return;
+        }
+
+        const syncCurrentSize = () => {
+            const { width, height } = container.getBoundingClientRect();
+            syncCardBorderOrbitSize(container, width, height);
+        };
+
+        syncCurrentSize();
+
+        if (typeof ResizeObserver === 'undefined') {
+            return () => {
+                container.style.removeProperty('--border-orbit-size');
+            };
+        }
+
+        const resizeObserver = new ResizeObserver((entries) => {
+            for (const entry of entries) {
+                if (entry.target !== container) {
+                    continue;
+                }
+
+                syncCardBorderOrbitSize(container, entry.contentRect.width, entry.contentRect.height);
+            }
+        });
+
+        resizeObserver.observe(container);
+
+        return () => {
+            resizeObserver.disconnect();
+            container.style.removeProperty('--border-orbit-size');
+        };
+    }, []);
 
     const mergedStyle = useMemo(() => {
         return {

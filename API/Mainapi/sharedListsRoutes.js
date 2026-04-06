@@ -5,7 +5,11 @@ const path = require('path');
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const axios = require('axios');
-const { getPool } = require('./mysqlPool');
+const {
+  getPool,
+  SCHEMA_BOOTSTRAP_LOCK_NAME,
+  withMysqlAdvisoryLock
+} = require('./mysqlPool');
 const { verifyAccessKey } = require('./checkVip');
 const { verifyTurnstileFromRequest } = require('./utils/turnstile');
 // Réutiliser l'instance Redis partagée au lieu d'en créer une nouvelle (évite les fuites mémoire)
@@ -16,6 +20,7 @@ const JWT_SECRET = process.env.JWT_SECRET;
 
 // === MySQL pool caché ===
 let _cachedPool = null;
+let ensureSharedListsTablePromise = null;
 function getCachedPool() {
   if (!_cachedPool) _cachedPool = getPool();
   return _cachedPool;
@@ -110,7 +115,51 @@ Réponds UNIQUEMENT avec ce format JSON (sans markdown, sans backticks):
 }
 
 // === Helper MySQL (même pattern que commentsRoutes.js) ===
+async function ensureSharedListsTable() {
+  if (ensureSharedListsTablePromise) {
+    return ensureSharedListsTablePromise;
+  }
+
+  ensureSharedListsTablePromise = (async () => {
+    const pool = getCachedPool();
+
+    await withMysqlAdvisoryLock(pool, SCHEMA_BOOTSTRAP_LOCK_NAME, async () => {
+      await pool.execute(`
+        CREATE TABLE IF NOT EXISTS shared_lists (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          user_id VARCHAR(255) NOT NULL,
+          user_type VARCHAR(50) NOT NULL,
+          profile_id VARCHAR(255) NOT NULL,
+          list_id VARCHAR(255) NOT NULL,
+          share_code VARCHAR(20) NOT NULL,
+          is_public_in_catalog TINYINT(1) NOT NULL DEFAULT 0,
+          moderation_flagged TINYINT(1) NOT NULL DEFAULT 0,
+          moderation_reason VARCHAR(255),
+          moderation_details TEXT,
+          moderated_at BIGINT,
+          created_at BIGINT NOT NULL,
+          updated_at BIGINT NOT NULL,
+          UNIQUE KEY uq_share_code (share_code),
+          UNIQUE KEY uq_user_list (user_id, user_type, profile_id, list_id),
+          INDEX idx_shared_lists_share_code (share_code),
+          INDEX idx_shared_lists_user_profile (user_id, user_type, profile_id),
+          INDEX idx_shared_lists_moderation (moderation_flagged, is_public_in_catalog)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+      `);
+    });
+
+    console.log('✅ Table MySQL shared_lists initialisée');
+  })().catch((error) => {
+    ensureSharedListsTablePromise = null;
+    console.error('❌ Erreur initialisation table MySQL shared_lists:', error.message);
+    throw error;
+  });
+
+  return ensureSharedListsTablePromise;
+}
+
 const dbRun = async (sql, params = []) => {
+  await ensureSharedListsTable();
   const pool = getCachedPool();
   const [result] = await pool.execute(sql, params);
   return {
@@ -120,52 +169,18 @@ const dbRun = async (sql, params = []) => {
 };
 
 const dbGet = async (sql, params = []) => {
+  await ensureSharedListsTable();
   const pool = getCachedPool();
   const [rows] = await pool.execute(sql, params);
   return rows.length > 0 ? rows[0] : null;
 };
 
 const dbAll = async (sql, params = []) => {
+  await ensureSharedListsTable();
   const pool = getCachedPool();
   const [rows] = await pool.execute(sql, params);
   return rows;
 };
-
-// === Init table MySQL ===
-async function initSharedListsTable() {
-  try {
-    const pool = getCachedPool();
-    await pool.execute(`
-      CREATE TABLE IF NOT EXISTS shared_lists (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        user_id VARCHAR(255) NOT NULL,
-        user_type VARCHAR(50) NOT NULL,
-        profile_id VARCHAR(255) NOT NULL,
-        list_id VARCHAR(255) NOT NULL,
-        share_code VARCHAR(20) NOT NULL,
-        is_public_in_catalog TINYINT(1) NOT NULL DEFAULT 0,
-        moderation_flagged TINYINT(1) NOT NULL DEFAULT 0,
-        moderation_reason VARCHAR(255),
-        moderation_details TEXT,
-        moderated_at BIGINT,
-        created_at BIGINT NOT NULL,
-        updated_at BIGINT NOT NULL,
-        UNIQUE KEY uq_share_code (share_code),
-        UNIQUE KEY uq_user_list (user_id, user_type, profile_id, list_id),
-        INDEX idx_shared_lists_share_code (share_code),
-        INDEX idx_shared_lists_user_profile (user_id, user_type, profile_id),
-        INDEX idx_shared_lists_moderation (moderation_flagged, is_public_in_catalog)
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-    `);
-
-    console.log('✅ Table MySQL shared_lists initialisée');
-  } catch (error) {
-    console.error('❌ Erreur initialisation table MySQL shared_lists:', error.message);
-  }
-}
-
-// Init table au démarrage (async, non bloquant)
-initSharedListsTable();
 
 // === Auth middleware (comme commentsRoutes.js) ===
 const requireAuth = async (req, res, next) => {
@@ -862,5 +877,7 @@ router.delete('/admin/moderated/:id', requireAdmin, async (req, res) => {
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
+
+router.initSharedListsTable = ensureSharedListsTable;
 
 module.exports = router;

@@ -15,6 +15,7 @@ import { SearchGridCard } from '../components/SearchCard';
 import { encodeId } from '../utils/idEncoder';
 import { getTmdbLanguage } from '../i18n';
 import { getLanguages } from '../data/languages';
+import { areSoundEffectsEnabled } from '../utils/soundSettings';
 
 const TMDB_API_KEY = import.meta.env.VITE_TMDB_API_KEY || '';
 
@@ -26,6 +27,8 @@ const getAudioCtx = () => {
 };
 
 const playTick = (pitch = 800, volume = 0.08) => {
+  if (!areSoundEffectsEnabled()) return;
+
   try {
     const ctx = getAudioCtx();
     // Short percussive click — like a roulette wheel peg
@@ -54,11 +57,15 @@ const playTick = (pitch = 800, volume = 0.08) => {
 };
 
 const playWinSound = () => {
+  if (!areSoundEffectsEnabled()) return;
+
   try {
     const ctx = getAudioCtx();
     // Rising arpeggio
     [0, 100, 200, 350].forEach((delay, i) => {
       setTimeout(() => {
+        if (!areSoundEffectsEnabled()) return;
+
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
         osc.type = i < 3 ? 'triangle' : 'sine';
@@ -354,6 +361,7 @@ const InlineSlotMachine: React.FC<{
   onComplete: (winners: RouletteItem[]) => void;
   skipAllSignal: number;
 }> = ({ pool, onComplete, skipAllSignal }) => {
+  const { t } = useTranslation();
   const [round, setRound] = useState(1);
   const [finishedCount, setFinishedCount] = useState(0);
   const [allCollected, setAllCollected] = useState<RouletteItem[]>([]);
@@ -508,7 +516,7 @@ const InlineSlotMachine: React.FC<{
         <div className="flex items-center justify-center gap-3 mb-3">
           <Dices className="w-5 h-5 text-red-500 animate-spin" />
           <span className="text-sm font-semibold text-white/70">
-            Tour {round}/2
+            {t('roulette.roundProgress', { round })}
           </span>
           <div className="flex gap-1.5">
             <div className={`w-2 h-2 rounded-full transition-colors ${isRound1Done ? 'bg-green-500' : 'bg-red-500 animate-pulse'}`} />
@@ -542,7 +550,7 @@ const InlineSlotMachine: React.FC<{
           animate={{ opacity: 1, y: 0 }}
           className="mt-4"
         >
-          <p className="text-xs font-semibold text-white/40 uppercase tracking-wider text-center mb-2">Tour 1</p>
+          <p className="text-xs font-semibold text-white/40 uppercase tracking-wider text-center mb-2">{t('roulette.roundNumber', { round: 1 })}</p>
           <div className="flex justify-center gap-2 sm:gap-3">
             {round1Winners.map((item, i) => (
               <motion.div
@@ -573,7 +581,7 @@ const InlineSlotMachine: React.FC<{
           animate={{ opacity: 1, y: 0 }}
           className="mt-3"
         >
-          <p className="text-xs font-semibold text-white/40 uppercase tracking-wider text-center mb-2">Tour 2</p>
+          <p className="text-xs font-semibold text-white/40 uppercase tracking-wider text-center mb-2">{t('roulette.roundNumber', { round: 2 })}</p>
           <div className="flex justify-center gap-2 sm:gap-3">
             {round2Winners.map((item, i) => (
               <motion.div
@@ -896,12 +904,12 @@ const RoulettePage: React.FC = () => {
     if (starred) {
       localStorage.setItem(key, JSON.stringify(list.filter((m: any) => m.id !== winner.id)));
       setStarred(false);
-      toast.success(`${title} retiré de la liste`);
+      toast.success(`${title} ${t('lists.removedFromList')}`);
     } else {
       list.push({ id: winner.id, type: winner.media_type, title, poster_path: winner.poster_path, addedAt: new Date().toISOString() });
       localStorage.setItem(key, JSON.stringify(list));
       setStarred(true);
-      toast.success(`${title} ajouté à la liste`);
+      toast.success(`${title} ${t('lists.addedToList')}`);
     }
   };
 

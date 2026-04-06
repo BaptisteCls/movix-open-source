@@ -3,6 +3,7 @@ import { useParams, Link, useSearchParams, useNavigate } from 'react-router-dom'
 import axios from 'axios';
 import { Loader, Video, Star, Calendar, List, Check, FolderPlus, ChevronRight, AlertTriangle, Play, X, MapPin, Languages, Building, ArrowLeft, Image, Download, Shield, EyeOff, MessageSquare, Archive, CheckCircle } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -243,6 +244,9 @@ interface TVImages {
 // Use shared certification utility
 const getClassificationLabel = getClassificationLabelUtil;
 
+const getAnimeLanguageLabel = (language: string, t: TFunction): string =>
+  t(`details.languages.${language.toLowerCase()}`, { defaultValue: language.toUpperCase() });
+
 /**
  * Calculates similarity between two titles to avoid false positives in anime matching
  * @param title1 First title
@@ -308,18 +312,23 @@ const calculateTitleSimilarity = (title1: string, title2: string): number => {
 };
 
 // Fonction utilitaire pour renommer les saisons de séries spécifiques (ex: 71446)
-const getSeasonDisplayName = (seasonNumber: number, showId: string | null | undefined, originalName?: string) => {
+const getSeasonDisplayName = (
+  seasonNumber: number,
+  showId: string | null | undefined,
+  t: TFunction,
+  originalName?: string
+) => {
   if (String(showId) === '71446') {
-    if (seasonNumber === 0) return "Partie 1 et 2";
-    if (seasonNumber === 2) return "Partie 3 et 4";
-    if (seasonNumber === 3) return "Partie 5";
+    if (seasonNumber === 0) return t('details.part1And2');
+    if (seasonNumber === 2) return t('details.part3And4');
+    if (seasonNumber === 3) return t('details.part5');
   }
-  return originalName || `Saison ${seasonNumber}`;
+  return originalName || `${t('details.season')} ${seasonNumber}`;
 };
 
 // 1. Update DEFAULT_IMAGE to a custom SVG string for fallback
-const SEASON_FALLBACK_SVG =
-  'data:image/svg+xml;utf8,<svg width="500" height="750" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 750" preserveAspectRatio="xMidYMid meet"><rect width="100%" height="100%" fill="%23222"/><g><rect x="80" y="180" width="340" height="260" rx="32" fill="%23333" stroke="%23555" stroke-width="8"/><rect x="120" y="220" width="260" height="180" rx="16" fill="%23444"/><rect x="180" y="420" width="140" height="20" rx="8" fill="%23555"/></g><text x="50%" y="70%" fill="%23777" font-size="48" font-family="Arial, sans-serif" text-anchor="middle" dy=".3em">SAISON</text></svg>';
+const getSeasonFallbackSvg = (label: string) =>
+  `data:image/svg+xml;utf8,<svg width="500" height="750" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 750" preserveAspectRatio="xMidYMid meet"><rect width="100%" height="100%" fill="%23222"/><g><rect x="80" y="180" width="340" height="260" rx="32" fill="%23333" stroke="%23555" stroke-width="8"/><rect x="120" y="220" width="260" height="180" rx="16" fill="%23444"/><rect x="180" y="420" width="140" height="20" rx="8" fill="%23555"/></g><text x="50%" y="70%" fill="%23777" font-size="48" font-family="Arial, sans-serif" text-anchor="middle" dy=".3em">${encodeURIComponent(label)}</text></svg>`;
 
 // Composant pour une image avec lazy loading
 const LazyTVImage = ({ src, alt, className, onLoad }: {
@@ -609,7 +618,7 @@ const TVImagesSection = ({ tvId }: { tvId: string }) => {
         whileTap={{ scale: 0.98 }}
       >
         <Image className="w-6 h-6" />
-        Images
+        {t('details.imagesTab')}
         <motion.div
           animate={{ rotate: showImages ? 180 : 0 }}
           transition={{ duration: 0.3 }}
@@ -801,7 +810,7 @@ const TVImagesSection = ({ tvId }: { tvId: string }) => {
                             <Archive className="w-5 h-5" />
                             <span>{t('details.downloadZip')}</span>
                             <span className="text-xs bg-white/20 px-2 py-1 rounded-full">
-                              {getImagesByCategory().length} images
+                              {t('details.imagesCount', { count: getImagesByCategory().length })}
                             </span>
                           </>
                         )}
@@ -2132,12 +2141,12 @@ const VideoPlayer = ({ showId, seasonNumber, episodeNumber, tvShowName, releaseY
                   }`}
               >
                 <div className="font-medium flex items-center justify-between">
-                  <span>Source MP4 {index + 1}</span>
+                    <span>{t('details.sourceMp4', { number: index + 1 })}</span>
                 </div>
                 <div className="text-xs opacity-75 flex items-center">
                   <span className="text-green-400 font-semibold">{source.label}</span>
                   <span className="mx-1">•</span>
-                  <span>{source.language || 'Français'}</span>
+                  <span>{source.language || t('details.langFrench')}</span>
                 </div>
               </button>
             ))}
@@ -2158,8 +2167,8 @@ const VideoPlayer = ({ showId, seasonNumber, episodeNumber, tvShowName, releaseY
                   : 'bg-gray-800 hover:bg-gray-700'
                   }`}
               >
-                <div className="font-medium">{source.label || source.quality || `Source ${index + 1}`}</div>
-                <div className="text-xs opacity-75">{source.language || 'Français'} - M3U8</div>
+                <div className="font-medium">{source.label || source.quality || t('details.sourceLabel', { number: index + 1 })}</div>
+                <div className="text-xs opacity-75">{source.language || t('details.langFrench')} - {t('details.m3u8Label')}</div>
               </button>
             ))}
           </div>
@@ -2189,7 +2198,7 @@ const VideoPlayer = ({ showId, seasonNumber, episodeNumber, tvShowName, releaseY
                 onClick={() => setM3u8Timeout(3000)} // Reset to default
                 className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 rounded"
               >
-                Reset
+                {t('common.reset')}
               </button>
             </div>
             <p className="text-xs text-gray-500 mt-1">
@@ -3398,16 +3407,16 @@ const TVDetails: React.FC = () => {
             <div className="text-center">
               {continueWatchingData.hasProgress ? (
                 <div className="flex flex-col items-center text-center w-full">
-                  <span>{t('details.resumeEpisode', { episode: continueWatchingData.episodeNumber, season: getSeasonDisplayName(continueWatchingData.seasonNumber, id) })}</span>
+                      <span>{t('details.resumeEpisode', { episode: continueWatchingData.episodeNumber, season: getSeasonDisplayName(continueWatchingData.seasonNumber, id, t) })}</span>
                   <span className="text-xs bg-red-800/80 text-white px-1.5 py-0.5 rounded font-medium mt-1">
                     {formatTime(continueWatchingData.position)}/{formatTime(continueWatchingData.duration)}
                   </span>
                 </div>
               ) : (availableSeasons.length > 0 && continueWatchingData.seasonNumber !== defaultStartSeason) || continueWatchingData.episodeNumber !== 1 ? (
-                <span>{t('details.continueEpisode', { episode: continueWatchingData.episodeNumber, season: getSeasonDisplayName(continueWatchingData.seasonNumber, id) })}</span>
+                      <span>{t('details.continueEpisode', { episode: continueWatchingData.episodeNumber, season: getSeasonDisplayName(continueWatchingData.seasonNumber, id, t) })}</span>
               ) : (
                 <>
-                  {t('details.startEpisode', { season: getSeasonDisplayName(defaultStartSeason, id) })}
+                    {t('details.startEpisode', { season: getSeasonDisplayName(defaultStartSeason, id, t) })}
                 </>
               )}
             </div>
@@ -4204,15 +4213,13 @@ const TVDetails: React.FC = () => {
                         const hasVostfr = ep.streaming_links.some((link: any) => link.language === 'vostfr');
                         const hasVf = ep.streaming_links.some((link: any) => link.language === 'vf');
                         const availableLanguages = [
-                          hasVf ? 'VF' : '',
-                          hasVostfr ? 'VOSTFR' : ''
+                          hasVf ? getAnimeLanguageLabel('vf', t) : '',
+                          hasVostfr ? getAnimeLanguageLabel('vostfr', t) : ''
                         ].filter(Boolean).join(', ');
 
                         // Récupérer toutes les langues disponibles pour cet épisode
                         const allLanguages = ep.streaming_links.map((link: any) => {
-                          if (link.language === 'vostfr') return 'VOSTFR';
-                          if (link.language === 'vf') return 'VF';
-                          return link.language.toUpperCase();
+                          return getAnimeLanguageLabel(link.language, t);
                         }).join(', ');
 
                         return (
@@ -4284,9 +4291,7 @@ const TVDetails: React.FC = () => {
                                     'bg-purple-600/70'
                                   }`}
                               >
-                                {language === 'vostfr' ? 'VOSTFR' :
-                                  language === 'vf' ? 'VF' :
-                                    language.toUpperCase()}
+                                {getAnimeLanguageLabel(language, t)}
                               </span>
                             ))}
                           </div>
@@ -4357,14 +4362,14 @@ const TVDetails: React.FC = () => {
                                 const retryUrl = hasFailed ? `${imageUrl}?retry=${Date.now()}` : imageUrl;
                                 return (
                                   <img
-                                    src={hasFailed ? SEASON_FALLBACK_SVG : retryUrl}
+                                    src={hasFailed ? getSeasonFallbackSvg(t('details.season').toUpperCase()) : retryUrl}
                                     alt={ep.name || `Épisode ${ep.episode_number}`}
                                     className="w-full h-full object-cover"
                                     onError={(e) => {
                                       if (!hasFailed) {
                                         setFailedImages(prev => ({ ...prev, [imageKey]: true }));
                                       } else {
-                                        e.currentTarget.src = SEASON_FALLBACK_SVG;
+                                        e.currentTarget.src = getSeasonFallbackSvg(t('details.season').toUpperCase());
                                       }
                                     }}
                                     key={retryUrl}
@@ -5138,7 +5143,7 @@ const TVDetails: React.FC = () => {
                           /* Affichage standard des saisons pour les séries non-anime */
                           availableSeasons.map((season) => {
                             const details = seasonsDetails[season];
-                            const imageUrl = details?.poster_path ? `https://image.tmdb.org/t/p/original${details.poster_path}` : SEASON_FALLBACK_SVG;
+                            const imageUrl = details?.poster_path ? `https://image.tmdb.org/t/p/original${details.poster_path}` : getSeasonFallbackSvg(t('details.season').toUpperCase());
                             const imageKey = `season-${season}-poster`;
                             const hasFailed = failedImages[imageKey];
                             const retryUrl = hasFailed ? `${imageUrl}?retry=${Date.now()}` : imageUrl;
@@ -5157,14 +5162,14 @@ const TVDetails: React.FC = () => {
                                 <div className="relative pb-[150%] bg-gray-900">
                                   {!shouldHide('seasonImages') ? (
                                     <img
-                                      src={hasFailed ? SEASON_FALLBACK_SVG : retryUrl}
-                                      alt={details?.name || `Saison ${season}`}
+                                      src={hasFailed ? getSeasonFallbackSvg(t('details.season').toUpperCase()) : retryUrl}
+                                      alt={details?.name || `${t('details.season')} ${season}`}
                                       className="absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                                       onError={(e) => {
                                         if (!hasFailed) {
                                           setFailedImages(prev => ({ ...prev, [imageKey]: true }));
                                         } else {
-                                          e.currentTarget.src = SEASON_FALLBACK_SVG;
+                                            e.currentTarget.src = getSeasonFallbackSvg(t('details.season').toUpperCase());
                                         }
                                       }}
                                       key={retryUrl}
@@ -5179,7 +5184,7 @@ const TVDetails: React.FC = () => {
                                   )}
                                   <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent p-3">
                                     <h3 className="text-base font-bold text-white line-clamp-2">
-                                      {shouldHide('episodeNames') ? getMaskedContent(getSeasonDisplayName(season, id, details?.name), 'episodeNames') : getSeasonDisplayName(season, id, details?.name)}
+                          {shouldHide('episodeNames') ? getMaskedContent(getSeasonDisplayName(season, id, t, details?.name), 'episodeNames') : getSeasonDisplayName(season, id, t, details?.name)}
                                     </h3>
                                     <div className="flex items-center gap-2 mt-1">
                                       <span className="text-xs text-gray-300">{details?.air_date ? new Date(details.air_date).getFullYear() : ''}</span>
@@ -5985,7 +5990,7 @@ const TVDetails: React.FC = () => {
                           <div className="space-y-2 max-h-60 overflow-y-auto">
                             {Array.from({ length: tvShow.number_of_seasons || 0 }, (_, i) => i + 1).map(season => (
                               <div key={season} className="grid grid-cols-3 gap-2 text-sm">
-                                <div className="text-gray-200">{getSeasonDisplayName(season, id, `Saison ${season}`)}</div>
+                                <div className="text-gray-200">{getSeasonDisplayName(season, id, t, `${t('details.season')} ${season}`)}</div>
                                 <div className="text-gray-200">
                                   {seasonsDetails[season]
                                     ? seasonsDetails[season].episodes.length
@@ -6094,7 +6099,7 @@ const TVDetails: React.FC = () => {
                               <div className="flex items-center justify-between">
                                 <div>
                                   <span className="text-xs font-semibold inline-block text-gray-300">
-                                    Post-production
+                                    {t('details.postProduction')}
                                   </span>
                                 </div>
                                 <div>
@@ -6130,7 +6135,7 @@ const TVDetails: React.FC = () => {
                           <rect x="2" y="7" width="20" height="15" rx="2" ry="2" />
                           <polyline points="17 2 12 7 7 2" />
                         </svg>
-                        Diffuseurs
+                        {t('details.broadcastNetworks')}
                       </h3>
                       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
                         {tvShow.networks.map((network, index) => (
@@ -6178,7 +6183,7 @@ const TVDetails: React.FC = () => {
                   <div className="flex items-center justify-between mb-6">
                     <h3 className="text-lg font-semibold flex items-center gap-2">
                       <Video className="w-5 h-5" />
-                      Vidéos et Bandes-annonces
+                        {t('details.videosAndTrailers')}
                     </h3>
 
                     <motion.button
@@ -6515,7 +6520,7 @@ const TVDetails: React.FC = () => {
                     availableSeasons.map(seasonNum => (
                       <div key={`season-videos-${seasonNum}`} className="mb-8">
                         <div className="flex items-center justify-between mb-6">
-                          <h4 className="text-lg font-semibold">{getSeasonDisplayName(seasonNum, id, `Saison ${seasonNum}`)}</h4>
+                        <h4 className="text-lg font-semibold">{getSeasonDisplayName(seasonNum, id, t, `${t('details.season')} ${seasonNum}`)}</h4>
 
                           <motion.button
                             whileHover={{
@@ -6862,7 +6867,7 @@ const TVDetails: React.FC = () => {
           {/* Interface de sélection de langue améliorée */}
           <div className="px-4 py-3 bg-gray-900 border-b border-gray-700">
             <div className="flex flex-col gap-3">
-              <h3 className="text-gray-300 font-medium">Version :</h3>
+              <h3 className="text-gray-300 font-medium">{t('details.versionLabel')}</h3>
               <div className="flex flex-wrap gap-3">
                 {selectedAnimeEpisode.streaming_links?.map((link: any, i: number) => (
                   <button
@@ -6873,7 +6878,7 @@ const TVDetails: React.FC = () => {
                       }`}
                     onClick={() => setSelectedLanguage(link.language)}
                   >
-                    {link.language === 'vostfr' ? 'VOSTFR' : link.language === 'vf' ? 'VF' : link.language.toUpperCase()}
+                    {getAnimeLanguageLabel(link.language, t)}
                   </button>
                 ))}
               </div>
@@ -6884,7 +6889,7 @@ const TVDetails: React.FC = () => {
           {selectedLanguage && selectedAnimeEpisode.streaming_links?.find((link: any) => link.language === selectedLanguage)?.players?.length > 0 && (
             <div className="px-4 py-3 bg-gray-800/50 border-b border-gray-700">
               <div className="flex flex-col gap-3">
-                <h3 className="text-gray-300 font-medium">Lecteurs disponibles :</h3>
+                <h3 className="text-gray-300 font-medium">{t('details.availablePlayers')}</h3>
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2">
                   {selectedAnimeEpisode.streaming_links
                     .find((link: any) => link.language === selectedLanguage)
@@ -6898,7 +6903,7 @@ const TVDetails: React.FC = () => {
                         onClick={() => setSelectedPlayer(index.toString())}
                       >
                         <Play className={`w-4 h-4 mr-1.5 ${selectedPlayer === index.toString() ? 'text-white' : 'text-gray-400'}`} />
-                        Lecteur {index + 1}
+                        {t('details.playerLabel', { number: index + 1 })}
                       </button>
                     ))
                   }

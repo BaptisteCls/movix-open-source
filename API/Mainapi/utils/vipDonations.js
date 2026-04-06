@@ -23,6 +23,7 @@ const VIP_PAYMENT_METHODS = Object.freeze({
   ltc: { type: 'crypto', coin: 'ltc' },
   paygate_hosted: { type: 'paygate', coin: null }
 });
+const VIP_PAYMENT_METHOD_ENUM_SQL = "ENUM('btc', 'ltc', 'paygate_hosted', 'autobuy')";
 
 const DEFAULT_SUPPORT_TELEGRAM_URL = 'https://t.me/movix_site';
 const FINAL_STATUSES = new Set(['delivered', 'cancelled']);
@@ -169,6 +170,11 @@ function isCryptoPaymentMethod(paymentMethod) {
 
 function isPaygatePaymentMethod(paymentMethod) {
   return paymentMethod === 'paygate_hosted';
+}
+
+function isAutoBuyPaymentMethod(paymentMethod) {
+  const normalized = String(paymentMethod || '').trim().toLowerCase();
+  return normalized === 'autobuy' || normalized === 'autobuy_paypal';
 }
 
 function getInvoicePaymentMethod(invoice) {
@@ -588,12 +594,60 @@ async function logVipInvoiceEvent(db, invoiceId, eventType, message, payload, ac
   );
 }
 
+async function expireAwaitingInvoiceIfOverdue(db, invoice) {
+  if (!invoice || invoice.status !== 'awaiting_payment') {
+    return invoice;
+  }
+
+  const expiresAt = fromSqlDateTime(invoice.expires_at);
+  if (!expiresAt || expiresAt.getTime() >= Date.now()) {
+    return invoice;
+  }
+
+  const [updateResult] = await db.execute(
+    `UPDATE vip_invoices
+      SET status = 'expired',
+          next_check_at = DATE_ADD(NOW(), INTERVAL 25 SECOND),
+          updated_at = NOW()
+      WHERE id = ?
+        AND status = 'awaiting_payment'
+        AND expires_at IS NOT NULL
+        AND expires_at < NOW()`,
+    [invoice.id]
+  );
+
+  if (parseNumber(updateResult?.affectedRows, 0) > 0) {
+    await logVipInvoiceEvent(
+      db,
+      invoice.id,
+      'invoice_status_updated',
+      STATUS_REASONS.expired,
+      {
+        from: 'awaiting_payment',
+        to: 'expired'
+      },
+      'system',
+      invoice.public_id || null
+    );
+  }
+
+  const [rows] = await db.execute(
+    'SELECT * FROM vip_invoices WHERE id = ? LIMIT 1',
+    [invoice.id]
+  );
+
+  return rows[0] || {
+    ...invoice,
+    status: 'expired'
+  };
+}
+
 async function fetchInvoiceByPublicId(pool, publicId) {
   const [rows] = await pool.execute(
     'SELECT * FROM vip_invoices WHERE public_id = ? LIMIT 1',
     [publicId]
   );
-  return rows[0] || null;
+  return expireAwaitingInvoiceIfOverdue(pool, rows[0] || null);
 }
 
 async function fetchInvoiceById(pool, invoiceId) {
@@ -609,7 +663,7 @@ async function fetchInvoiceByGiftToken(pool, giftToken) {
     'SELECT * FROM vip_invoices WHERE gift_token = ? LIMIT 1',
     [giftToken]
   );
-  return rows[0] || null;
+  return expireAwaitingInvoiceIfOverdue(pool, rows[0] || null);
 }
 
 async function generateUniqueVipKey(db) {
@@ -866,7 +920,7 @@ function serializePublicInvoice(invoice) {
       : null,
     checkoutUrl: isPaygatePaymentMethod(paymentMethod)
       ? resolvePaygateCheckoutUrl(invoice)
-      : null,
+        : null,
     addressType: isCryptoInvoice ? (invoice.address_type || null) : null,
     confirmations: isCryptoInvoice ? parseNumber(invoice.confirmations) : null,
     requiredConfirmations: isCryptoInvoice ? parseNumber(invoice.required_confirmations) : null,
@@ -880,6 +934,10 @@ function serializePublicInvoice(invoice) {
     giftPath: isGiftDelivered ? giftPath : null,
     giftUrl: isGiftDelivered ? buildFrontendUrl(giftPath) : null,
     vipKey: isSelfDelivered ? invoice.vip_key_value : null,
+    externalOrderId: null,
+    externalGateway: null,
+    externalAmount: null,
+    externalCurrency: null,
     supportTelegramUrl: getSupportTelegramUrl()
   };
 }
@@ -910,6 +968,11 @@ function serializeAdminInvoice(invoice) {
       ? roundFiat(invoice.paygate_paid_value)
       : null,
     paidTxid: invoice.paygate_paid_txid || null,
+    externalOrderId: null,
+    externalProductId: null,
+    externalGateway: null,
+    externalCurrency: null,
+    externalAmount: null,
     reason: STATUS_REASONS[invoice.status] || null
   };
 }
@@ -932,6 +995,28 @@ function serializeGift(invoice) {
   };
 }
 
+async function listUserVipInvoices(pool, auth, options = {}) {
+  if (!auth?.userId || !auth?.userType) {
+    return [];
+  }
+
+  const limit = Math.min(100, Math.max(1, parseNumber(options.limit, 30)));
+  const [rows] = await pool.execute(
+    `SELECT * FROM vip_invoices
+      WHERE created_by_user_id = ?
+        AND created_by_user_type = ?
+      ORDER BY created_at DESC
+      LIMIT ?`,
+    [auth.userId, auth.userType, limit]
+  );
+
+  const normalizedRows = await Promise.all(
+    rows.map((invoice) => expireAwaitingInvoiceIfOverdue(pool, invoice))
+  );
+
+  return normalizedRows.map(serializePublicInvoice);
+}
+
 async function refreshInvoiceStatus(pool, invoiceInput, options = {}) {
   const invoice = invoiceInput?.id ? invoiceInput : await fetchInvoiceById(pool, invoiceInput);
   if (!invoice) {
@@ -951,6 +1036,8 @@ async function refreshInvoiceStatus(pool, invoiceInput, options = {}) {
   }
 
   const paymentMethod = getInvoicePaymentMethod(invoice);
+  const rawPaymentMethod = String(invoice.payment_method || '').trim().toLowerCase();
+
   if (isPaygatePaymentMethod(paymentMethod)) {
     const isExpired = fromSqlDateTime(invoice.expires_at)?.getTime() < Date.now();
     const shouldExpire = invoice.status === 'awaiting_payment' && isExpired;
@@ -995,6 +1082,52 @@ async function refreshInvoiceStatus(pool, invoiceInput, options = {}) {
       );
     }
 
+    return refreshedInvoice;
+  }
+
+  if (isAutoBuyPaymentMethod(rawPaymentMethod)) {
+    const isExpired = fromSqlDateTime(invoice.expires_at)?.getTime() < Date.now();
+
+    if (invoice.status === 'paid') {
+      return deliverInvoiceIfReady(
+        pool,
+        invoice.id,
+        options.actorType || 'system',
+        options.actorId || null,
+        'legacy_autobuy_paid_invoice'
+      );
+    }
+
+    if (invoice.status === 'awaiting_payment' && isExpired) {
+      await pool.execute(
+        `UPDATE vip_invoices
+          SET status = 'expired',
+              next_check_at = DATE_ADD(NOW(), INTERVAL 25 SECOND),
+              updated_at = NOW()
+          WHERE id = ?`,
+        [invoice.id]
+      );
+
+      await logVipInvoiceEvent(
+        pool,
+        invoice.id,
+        'invoice_status_updated',
+        STATUS_REASONS.expired,
+        {
+          from: invoice.status,
+          to: 'expired'
+        },
+        options.actorType || 'system',
+        options.actorId || null
+      );
+    } else {
+      await pool.execute(
+        'UPDATE vip_invoices SET next_check_at = DATE_ADD(NOW(), INTERVAL 25 SECOND), updated_at = NOW() WHERE id = ?',
+        [invoice.id]
+      );
+    }
+
+    const refreshedInvoice = await fetchInvoiceById(pool, invoice.id);
     return refreshedInvoice;
   }
 
@@ -1089,9 +1222,15 @@ async function listVipInvoices(pool, options = {}) {
       OR COALESCE(paygate_tracking_address, '') LIKE ?
       OR COALESCE(paygate_paid_txid, '') LIKE ?
       OR COALESCE(paygate_payer_email, '') LIKE ?
+      OR COALESCE(autobuy_order_id, '') LIKE ?
+      OR COALESCE(autobuy_product_id, '') LIKE ?
+      OR COALESCE(autobuy_email, '') LIKE ?
     )`);
     const searchTerm = `%${options.search}%`;
     params.push(
+      searchTerm,
+      searchTerm,
+      searchTerm,
       searchTerm,
       searchTerm,
       searchTerm,
@@ -1672,6 +1811,131 @@ async function ensureIndexExists(pool, tableName, indexName, definitionSql) {
   }
 }
 
+async function normalizeVipInvoicePaymentMethods(pool) {
+  await pool.execute(`
+    ALTER TABLE vip_invoices
+    MODIFY COLUMN payment_method VARCHAR(64) NULL
+  `);
+
+  await pool.execute(`
+    UPDATE vip_invoices
+    SET payment_method = NULLIF(LOWER(TRIM(payment_method)), '')
+    WHERE payment_method IS NOT NULL
+  `);
+
+  await pool.execute(`
+    UPDATE vip_invoices
+    SET payment_method = LOWER(TRIM(coin))
+    WHERE payment_method IS NULL
+      AND coin IS NOT NULL
+  `);
+
+  await pool.execute(`
+    UPDATE vip_invoices
+    SET payment_method = 'btc'
+    WHERE payment_method IN ('bitcoin', 'btc_onchain', 'btc_mainnet')
+  `);
+
+  await pool.execute(`
+    UPDATE vip_invoices
+    SET payment_method = 'ltc'
+    WHERE payment_method IN ('litecoin', 'ltc_onchain', 'ltc_mainnet')
+  `);
+
+  await pool.execute(`
+    UPDATE vip_invoices
+    SET payment_method = 'paygate_hosted'
+    WHERE payment_method IN ('paygate', 'paygate_checkout', 'hosted', 'hosted_checkout', 'checkout')
+  `);
+
+  await pool.execute(`
+    UPDATE vip_invoices
+    SET autobuy_gateway = COALESCE(
+          NULLIF(autobuy_gateway, ''),
+          CASE
+            WHEN payment_method = 'autobuy_paypal' THEN 'paypal'
+            ELSE payment_method
+          END
+        ),
+        payment_method = 'autobuy'
+    WHERE payment_method IN ('autobuy_paypal', 'paypal', 'card', 'manual', 'other')
+  `);
+
+  await pool.execute(`
+    UPDATE vip_invoices
+    SET autobuy_gateway = CASE
+          WHEN coin IN ('btc', 'ltc') THEN autobuy_gateway
+          ELSE COALESCE(NULLIF(autobuy_gateway, ''), 'crypto')
+        END,
+        payment_method = CASE
+          WHEN coin IN ('btc', 'ltc') THEN coin
+          ELSE 'autobuy'
+        END
+    WHERE payment_method = 'crypto'
+  `);
+
+  await pool.execute(`
+    UPDATE vip_invoices
+    SET payment_method = 'paygate_hosted'
+    WHERE payment_method IS NULL
+      AND (
+        NULLIF(paygate_tracking_address, '') IS NOT NULL
+        OR NULLIF(paygate_temporary_wallet_address, '') IS NOT NULL
+        OR NULLIF(paygate_callback_url, '') IS NOT NULL
+        OR NULLIF(paygate_callback_nonce, '') IS NOT NULL
+        OR NULLIF(paygate_checkout_url, '') IS NOT NULL
+        OR NULLIF(paygate_payer_email, '') IS NOT NULL
+        OR NULLIF(paygate_paid_coin, '') IS NOT NULL
+        OR paygate_paid_value IS NOT NULL
+        OR NULLIF(paygate_paid_txid, '') IS NOT NULL
+      )
+  `);
+
+  await pool.execute(`
+    UPDATE vip_invoices
+    SET payment_method = 'autobuy'
+    WHERE payment_method IS NULL
+      AND (
+        NULLIF(autobuy_order_id, '') IS NOT NULL
+        OR NULLIF(autobuy_product_id, '') IS NOT NULL
+        OR NULLIF(autobuy_email, '') IS NOT NULL
+        OR NULLIF(autobuy_checkout_url, '') IS NOT NULL
+        OR NULLIF(autobuy_gateway, '') IS NOT NULL
+        OR NULLIF(autobuy_currency, '') IS NOT NULL
+        OR autobuy_total IS NOT NULL
+        OR autobuy_order_created_at IS NOT NULL
+      )
+  `);
+
+  await pool.execute(`
+    UPDATE vip_invoices
+    SET autobuy_gateway = COALESCE(NULLIF(autobuy_gateway, ''), payment_method),
+        payment_method = 'autobuy'
+    WHERE payment_method IS NOT NULL
+      AND payment_method NOT IN ('btc', 'ltc', 'paygate_hosted', 'autobuy')
+  `);
+
+  await pool.execute(`
+    UPDATE vip_invoices
+    SET payment_method = CASE
+      WHEN coin IN ('btc', 'ltc') THEN coin
+      WHEN (
+        NULLIF(paygate_tracking_address, '') IS NOT NULL
+        OR NULLIF(paygate_temporary_wallet_address, '') IS NOT NULL
+        OR NULLIF(paygate_callback_url, '') IS NOT NULL
+        OR NULLIF(paygate_callback_nonce, '') IS NOT NULL
+        OR NULLIF(paygate_checkout_url, '') IS NOT NULL
+        OR NULLIF(paygate_payer_email, '') IS NOT NULL
+        OR NULLIF(paygate_paid_coin, '') IS NOT NULL
+        OR paygate_paid_value IS NOT NULL
+        OR NULLIF(paygate_paid_txid, '') IS NOT NULL
+      ) THEN 'paygate_hosted'
+      ELSE 'autobuy'
+    END
+    WHERE payment_method IS NULL
+  `);
+}
+
 async function ensureVipDonationsTables(pool) {
   await pool.execute(`
     CREATE TABLE IF NOT EXISTS vip_derivation_counters (
@@ -1686,7 +1950,7 @@ async function ensureVipDonationsTables(pool) {
     CREATE TABLE IF NOT EXISTS vip_invoices (
       id INT AUTO_INCREMENT PRIMARY KEY,
       public_id VARCHAR(64) NOT NULL UNIQUE,
-      payment_method ENUM('btc', 'ltc', 'paygate_hosted') NOT NULL,
+      payment_method ${VIP_PAYMENT_METHOD_ENUM_SQL} NOT NULL,
       status ENUM('awaiting_payment', 'partial_payment', 'confirming', 'paid', 'delivered', 'expired', 'cancelled') NOT NULL DEFAULT 'awaiting_payment',
       coin ENUM('btc', 'ltc') DEFAULT NULL,
       pack_eur DECIMAL(10,2) NOT NULL,
@@ -1726,6 +1990,14 @@ async function ensureVipDonationsTables(pool) {
       paygate_paid_coin VARCHAR(64) DEFAULT NULL,
       paygate_paid_value DECIMAL(18,8) DEFAULT NULL,
       paygate_paid_txid VARCHAR(255) DEFAULT NULL,
+      autobuy_order_id VARCHAR(128) DEFAULT NULL,
+      autobuy_product_id VARCHAR(128) DEFAULT NULL,
+      autobuy_email VARCHAR(255) DEFAULT NULL,
+      autobuy_checkout_url TEXT DEFAULT NULL,
+      autobuy_gateway VARCHAR(64) DEFAULT NULL,
+      autobuy_currency VARCHAR(16) DEFAULT NULL,
+      autobuy_total DECIMAL(18,8) DEFAULT NULL,
+      autobuy_order_created_at DATETIME DEFAULT NULL,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       INDEX idx_vip_invoices_payment_method (payment_method),
@@ -1734,7 +2006,8 @@ async function ensureVipDonationsTables(pool) {
       INDEX idx_vip_invoices_created_at (created_at),
       INDEX idx_vip_invoices_payment_address (payment_address),
       INDEX idx_vip_invoices_vip_key (vip_key_value),
-      INDEX idx_vip_invoices_paygate_paid_txid (paygate_paid_txid)
+      INDEX idx_vip_invoices_paygate_paid_txid (paygate_paid_txid),
+      UNIQUE KEY uniq_vip_invoices_autobuy_order_id (autobuy_order_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
 
@@ -1764,7 +2037,7 @@ async function ensureVipDonationsTables(pool) {
     pool,
     'vip_invoices',
     'payment_method',
-    "`payment_method` ENUM('btc', 'ltc', 'paygate_hosted') NULL AFTER `public_id`"
+    `\`payment_method\` ${VIP_PAYMENT_METHOD_ENUM_SQL} NULL AFTER \`public_id\``
   );
   await ensureColumnExists(
     pool,
@@ -1820,6 +2093,54 @@ async function ensureVipDonationsTables(pool) {
     'paygate_paid_txid',
     "`paygate_paid_txid` VARCHAR(255) DEFAULT NULL AFTER `paygate_paid_value`"
   );
+  await ensureColumnExists(
+    pool,
+    'vip_invoices',
+    'autobuy_order_id',
+    "`autobuy_order_id` VARCHAR(128) DEFAULT NULL AFTER `paygate_paid_txid`"
+  );
+  await ensureColumnExists(
+    pool,
+    'vip_invoices',
+    'autobuy_product_id',
+    "`autobuy_product_id` VARCHAR(128) DEFAULT NULL AFTER `autobuy_order_id`"
+  );
+  await ensureColumnExists(
+    pool,
+    'vip_invoices',
+    'autobuy_email',
+    "`autobuy_email` VARCHAR(255) DEFAULT NULL AFTER `autobuy_product_id`"
+  );
+  await ensureColumnExists(
+    pool,
+    'vip_invoices',
+    'autobuy_checkout_url',
+    "`autobuy_checkout_url` TEXT DEFAULT NULL AFTER `autobuy_email`"
+  );
+  await ensureColumnExists(
+    pool,
+    'vip_invoices',
+    'autobuy_gateway',
+    "`autobuy_gateway` VARCHAR(64) DEFAULT NULL AFTER `autobuy_checkout_url`"
+  );
+  await ensureColumnExists(
+    pool,
+    'vip_invoices',
+    'autobuy_currency',
+    "`autobuy_currency` VARCHAR(16) DEFAULT NULL AFTER `autobuy_gateway`"
+  );
+  await ensureColumnExists(
+    pool,
+    'vip_invoices',
+    'autobuy_total',
+    "`autobuy_total` DECIMAL(18,8) DEFAULT NULL AFTER `autobuy_currency`"
+  );
+  await ensureColumnExists(
+    pool,
+    'vip_invoices',
+    'autobuy_order_created_at',
+    "`autobuy_order_created_at` DATETIME DEFAULT NULL AFTER `autobuy_total`"
+  );
 
   await pool.execute(`
     UPDATE vip_invoices
@@ -1831,9 +2152,10 @@ async function ensureVipDonationsTables(pool) {
     ALTER TABLE vip_invoices
     MODIFY COLUMN vip_years DECIMAL(5,2) NOT NULL
   `);
+  await normalizeVipInvoicePaymentMethods(pool);
   await pool.execute(`
     ALTER TABLE vip_invoices
-    MODIFY COLUMN payment_method ENUM('btc', 'ltc', 'paygate_hosted') NOT NULL
+    MODIFY COLUMN payment_method ${VIP_PAYMENT_METHOD_ENUM_SQL} NOT NULL
   `);
   await pool.execute(`
     ALTER TABLE vip_invoices
@@ -1852,6 +2174,12 @@ async function ensureVipDonationsTables(pool) {
     'idx_vip_invoices_paygate_paid_txid',
     'INDEX `idx_vip_invoices_paygate_paid_txid` (`paygate_paid_txid`)'
   );
+  await ensureIndexExists(
+    pool,
+    'vip_invoices',
+    'uniq_vip_invoices_autobuy_order_id',
+    'UNIQUE INDEX `uniq_vip_invoices_autobuy_order_id` (`autobuy_order_id`)'
+  );
 }
 
 module.exports = {
@@ -1867,6 +2195,7 @@ module.exports = {
   forceValidateInvoice,
   cancelInvoice,
   getVipInvoiceDetails,
+  listUserVipInvoices,
   listVipInvoices,
   serializePublicInvoice,
   serializeAdminInvoice,
@@ -1900,3 +2229,4 @@ module.exports = {
   getInvoicePath,
   getGiftPath
 };
+

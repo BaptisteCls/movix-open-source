@@ -1,5 +1,6 @@
 import React, { useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { Star, Calendar } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { toast } from 'sonner';
@@ -31,6 +32,7 @@ interface GridCardProps {
 }
 
 export const SearchGridCard: React.FC<GridCardProps> = React.memo(({ item, index, movieLabel, serieLabel }) => {
+    const { t } = useTranslation();
     const [starred, setStarred] = useState(() => {
         const list = JSON.parse(localStorage.getItem(`watchlist_${item.media_type}`) || '[]');
         return list.some((m: any) => m.id === item.id);
@@ -47,14 +49,14 @@ export const SearchGridCard: React.FC<GridCardProps> = React.memo(({ item, index
         if (exists) {
             localStorage.setItem(key, JSON.stringify(list.filter((m: any) => m.id !== item.id)));
             setStarred(false);
-            toast.success(`${title} retiré de la liste`, { duration: 2000 });
+            toast.success(`${title} ${t('lists.removedFromList')}`, { duration: 2000 });
         } else {
             list.push({ id: item.id, type: item.media_type, title, poster_path: item.poster_path, addedAt: new Date().toISOString() });
             localStorage.setItem(key, JSON.stringify(list));
             setStarred(true);
-            toast.success(`${title} ajouté à la liste`, { duration: 2000 });
+            toast.success(`${title} ${t('lists.addedToList')}`, { duration: 2000 });
         }
-    }, [item, title]);
+    }, [item, title, t]);
 
     return (
         <motion.div
@@ -91,7 +93,7 @@ export const SearchGridCard: React.FC<GridCardProps> = React.memo(({ item, index
                     </motion.button>
                 </TooltipTrigger>
                 <TooltipContent>
-                    {starred ? 'Retirer de ma liste' : 'Ajouter à ma liste'}
+                    {starred ? t('profile.removeFromWatchlist') : t('profile.addToWatchlist')}
                 </TooltipContent>
             </Tooltip>
 
@@ -150,6 +152,7 @@ interface ListCardProps {
 }
 
 export const SearchListCard: React.FC<ListCardProps> = React.memo(({ item, index, movieLabel, serieLabel, watchlistLabel, removeLabel, noDescLabel }) => {
+    const { t } = useTranslation();
     const [starred, setStarred] = useState(() => {
         const list = JSON.parse(localStorage.getItem(`watchlist_${item.media_type}`) || '[]');
         return list.some((m: any) => m.id === item.id);
@@ -166,14 +169,14 @@ export const SearchListCard: React.FC<ListCardProps> = React.memo(({ item, index
         if (exists) {
             localStorage.setItem(key, JSON.stringify(list.filter((m: any) => m.id !== item.id)));
             setStarred(false);
-            toast.success(`${title} retiré de la liste`, { duration: 2000 });
+            toast.success(`${title} ${t('lists.removedFromList')}`, { duration: 2000 });
         } else {
             list.push({ id: item.id, type: item.media_type, title, poster_path: item.poster_path, addedAt: new Date().toISOString() });
             localStorage.setItem(key, JSON.stringify(list));
             setStarred(true);
-            toast.success(`${title} ajouté à la liste`, { duration: 2000 });
+            toast.success(`${title} ${t('lists.addedToList')}`, { duration: 2000 });
         }
-    }, [item, title]);
+    }, [item, title, t]);
 
     return (
         <motion.div
@@ -240,7 +243,7 @@ export const SearchListCard: React.FC<ListCardProps> = React.memo(({ item, index
                                 </motion.button>
                             </TooltipTrigger>
                             <TooltipContent>
-                                {starred ? 'Retirer de ma liste' : 'Ajouter à ma liste'}
+                                {starred ? t('profile.removeFromWatchlist') : t('profile.addToWatchlist')}
                             </TooltipContent>
                         </Tooltip>
                     </div>

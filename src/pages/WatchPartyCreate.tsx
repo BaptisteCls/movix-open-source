@@ -380,7 +380,7 @@ const WatchPartyCreate: React.FC = () => {
                     )}
 
                     <span className="text-white/40">•</span>
-                    <span>Début : {Math.floor(mediaInfo.position / 60)}:{String(Math.floor(mediaInfo.position % 60)).padStart(2, '0')}</span>
+                    <span>{t('watchParty.startAtLabel')}: {Math.floor(mediaInfo.position / 60)}:{String(Math.floor(mediaInfo.position % 60)).padStart(2, '0')}</span>
                   </div>
                 </div>
 
@@ -543,7 +543,7 @@ const WatchPartyCreate: React.FC = () => {
                             <div className="mb-3 flex items-center justify-between gap-3">
                               <div>
                                 <p className="text-sm font-semibold text-white">{group.label}</p>
-                                <p className="mt-1 text-xs text-white/45">{group.options.length} option(s)</p>
+                                <p className="mt-1 text-xs text-white/45">{t('watchParty.optionCount', { count: group.options.length })}</p>
                               </div>
                               {activeSourceGroup?.id === group.id && (
                                 <Badge variant="default" className="border border-white/15 bg-white/10 text-white/80 hover:bg-white/15">

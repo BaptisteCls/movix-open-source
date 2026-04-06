@@ -126,10 +126,10 @@ const livetvSportOrder = [
 ];
 
 const livetvStatusOptions = [
-  { key: 'playable', label: 'Jouables' },
-  { key: 'live', label: 'En direct' },
-  { key: 'upcoming', label: 'À venir' },
-  { key: 'all', label: 'Tous' },
+  { key: 'playable', labelKey: 'liveTV.playableFilter' },
+  { key: 'live', labelKey: 'liveTV.liveFilter' },
+  { key: 'upcoming', labelKey: 'liveTV.upcomingFilter' },
+  { key: 'all', labelKey: 'common.all' },
 ] as const;
 
 // Source display names for dropdown
@@ -403,12 +403,12 @@ const LiveTV: React.FC = () => {
         const response = await fetch(`${API_BASE}/api/livetv/iptv/categories`, {
           headers: { ...getVipHeaders() }
         });
-        if (!response.ok) throw new Error('Erreur chargement catégories IPTV');
+        if (!response.ok) throw new Error(t('liveTV.loadCategoriesError'));
         const data = await response.json();
         setIptvCategories(data.categories || []);
       } catch (err) {
         console.error('Error fetching IPTV categories:', err);
-        setError(err instanceof Error ? err.message : 'Erreur IPTV');
+        setError(err instanceof Error ? err.message : t('liveTV.loadingError'));
       } finally {
         setLoadingIptvCategories(false);
       }
@@ -428,12 +428,12 @@ const LiveTV: React.FC = () => {
         const response = await fetch(`${API_BASE}/api/livetv/iptv/streams/${selectedIptvCategory}`, {
           headers: { ...getVipHeaders() }
         });
-        if (!response.ok) throw new Error('Erreur chargement chaînes IPTV');
+        if (!response.ok) throw new Error(t('liveTV.loadChannelsError'));
         const data = await response.json();
         setIptvStreams(data.streams || []);
       } catch (err) {
         console.error('Error fetching IPTV streams:', err);
-        setError(err instanceof Error ? err.message : 'Erreur IPTV');
+        setError(err instanceof Error ? err.message : t('liveTV.loadingError'));
         setIptvStreams([]);
       } finally {
         setLoadingIptvStreams(false);
@@ -483,7 +483,7 @@ const LiveTV: React.FC = () => {
     });
 
     return [
-      { key: 'all', label: 'Tous', emoji: '📅' },
+      { key: 'all', label: t('common.all'), emoji: '📅' },
       ...Array.from(sportsMap.values()).sort((a, b) => {
         const orderA = livetvSportOrder.indexOf(a.key);
         const orderB = livetvSportOrder.indexOf(b.key);
@@ -551,7 +551,7 @@ const LiveTV: React.FC = () => {
       const response = await fetch(`${API_BASE}/api/livetv/iptv/stream-url/${stream.stream_id}`, {
         headers: { ...getVipHeaders() }
       });
-      if (!response.ok) throw new Error('Erreur récupération stream IPTV');
+      if (!response.ok) throw new Error(t('liveTV.streamFetchError'));
       const data = await response.json();
       const streamUrl = data.streams?.[0]?.url;
       if (streamUrl) {
@@ -565,7 +565,7 @@ const LiveTV: React.FC = () => {
       }
     } catch (err) {
       console.error('Error getting IPTV stream URL:', err);
-      setError(err instanceof Error ? err.message : 'Erreur IPTV');
+      setError(err instanceof Error ? err.message : t('liveTV.loadingError'));
     }
   };
 
@@ -766,7 +766,7 @@ const LiveTV: React.FC = () => {
                       {label}
                       {isLocked && <Lock className="w-3 h-3 ml-0.5 text-white opacity-20" />}
                       {source === 'iptv' && !isLocked && (
-                        <Badge variant="premium" className="text-[9px] px-1.5 py-0 ml-0.5">VIP</Badge>
+                        <Badge variant="premium" className="text-[9px] px-1.5 py-0 ml-0.5">{t('common.vip')}</Badge>
                       )}
                     </motion.button>
                   );
@@ -809,7 +809,7 @@ const LiveTV: React.FC = () => {
                 {loadingIptvCategories ? (
                   <div className="flex items-center gap-3 h-10 px-4 bg-white/[0.03] border border-white/[0.06] rounded-lg text-white/40 text-sm">
                     <Loader2 className="w-4 h-4 animate-spin" />
-                    Chargement...
+                    {t('common.loading')}
                   </div>
                 ) : (
                   <>
@@ -826,7 +826,7 @@ const LiveTV: React.FC = () => {
                       <span className="truncate flex-1 text-left text-white/80">
                         {selectedIptvCategory
                           ? iptvCategories.find(c => c.category_id === selectedIptvCategory)?.category_name
-                          : 'Choisir une catégorie...'}
+                          : t('liveTV.chooseCategory')}
                       </span>
                       <span className="text-white/25 text-xs tabular-nums shrink-0">{iptvCategories.length}</span>
                       <ChevronDown className={cn('w-4 h-4 text-white opacity-30 shrink-0 transition-transform duration-200', iptvCategoryDropdownOpen && 'rotate-180')} />
@@ -846,7 +846,7 @@ const LiveTV: React.FC = () => {
                             <div className="relative">
                               <Input
                                 type="text"
-                                placeholder="Rechercher..."
+                                placeholder={t('common.searchPlaceholder')}
                                 value={iptvCategorySearch}
                                 onChange={(e) => setIptvCategorySearch(e.target.value)}
                                 className="pl-8 h-8 text-xs bg-white/[0.04] border-white/[0.06]"
@@ -877,7 +877,7 @@ const LiveTV: React.FC = () => {
                                 </button>
                               ))}
                             {iptvCategories.filter(cat => cat.category_name.toLowerCase().includes(iptvCategorySearch.toLowerCase())).length === 0 && (
-                              <p className="text-white/25 text-xs text-center py-6">Aucun résultat</p>
+                              <p className="text-white/25 text-xs text-center py-6">{t('common.noResults')}</p>
                             )}
                           </div>
                         </motion.div>
@@ -921,7 +921,7 @@ const LiveTV: React.FC = () => {
             className="mb-5 space-y-3"
           >
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-[11px] uppercase tracking-[0.18em] text-white/30">Statut</span>
+              <span className="text-[11px] uppercase tracking-[0.18em] text-white/30">{t('liveTV.statusLabel')}</span>
               {livetvStatusOptions.map((option) => {
                 const active = livetvStatusFilter === option.key;
                 return (
@@ -935,7 +935,7 @@ const LiveTV: React.FC = () => {
                         : 'bg-white/[0.03] text-white/55 border-white/[0.06] hover:bg-white/[0.05] hover:text-white/85'
                     )}
                   >
-                    {option.label}
+                    {t(option.labelKey)}
                   </button>
                 );
               })}
@@ -1007,13 +1007,13 @@ const LiveTV: React.FC = () => {
               <Link to="/extension">
                 <Button variant="outline" size="sm" className="border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/5 gap-1.5 text-xs">
                   <Puzzle className="w-3.5 h-3.5" />
-                  Extension
+                  {t('common.extension')}
                 </Button>
               </Link>
               <Link to="/vip">
                 <Button size="sm" className="bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white border-0 gap-1.5 text-xs shadow-lg shadow-amber-900/20">
                   <Crown className="w-3.5 h-3.5" />
-                  VIP
+                  {t('common.vip')}
                 </Button>
               </Link>
             </div>
@@ -1032,8 +1032,8 @@ const LiveTV: React.FC = () => {
                   <i className="bi bi-globe text-4xl text-white/10" />
                 </div>
                 <div className="text-center space-y-1">
-                  <p className="text-white/60 text-sm font-medium">Sélectionnez une catégorie</p>
-                  <p className="text-white/25 text-xs">catégories disponibles</p>
+                  <p className="text-white/60 text-sm font-medium">{t('liveTV.selectCategoryPrompt')}</p>
+                  <p className="text-white/25 text-xs">{t('liveTV.availableCategories', { count: iptvCategories.length })}</p>
                 </div>
               </div>
             ) : filteredIptvStreams.length === 0 ? (

@@ -341,7 +341,7 @@ const SharedListPage: React.FC = () => {
                 <div className="flex items-center gap-2">
                   <p className="text-white font-semibold">{listData.username}</p>
                   {listData.isVip && (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 font-semibold">⭐ VIP</span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 font-semibold">{t('lists.vipBadge')}</span>
                   )}
                 </div>
               </div>
@@ -368,19 +368,19 @@ const SharedListPage: React.FC = () => {
             {stats.movies > 0 && (
               <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full border border-blue-500/30 bg-blue-500/10">
                 <Film className="w-4 h-4 text-blue-400" />
-                <span className="text-blue-300 text-sm font-medium">{stats.movies} film{stats.movies > 1 ? 's' : ''}</span>
+                <span className="text-blue-300 text-sm font-medium">{t('lists.movieCount', { count: stats.movies })}</span>
               </div>
             )}
             {stats.tv > 0 && (
               <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full border border-green-500/30 bg-green-500/10">
                 <Tv className="w-4 h-4 text-green-400" />
-                <span className="text-green-300 text-sm font-medium">{stats.tv} série{stats.tv > 1 ? 's' : ''}</span>
+                <span className="text-green-300 text-sm font-medium">{t('lists.seriesCount', { count: stats.tv })}</span>
               </div>
             )}
             {stats.collections > 0 && (
               <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full border border-purple-500/30 bg-purple-500/10">
                 <Library className="w-4 h-4 text-purple-400" />
-                <span className="text-purple-300 text-sm font-medium">{stats.collections} collection{stats.collections > 1 ? 's' : ''}</span>
+                <span className="text-purple-300 text-sm font-medium">{t('lists.collectionCount', { count: stats.collections })}</span>
               </div>
             )}
           </motion.div>

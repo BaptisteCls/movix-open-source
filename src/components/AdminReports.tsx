@@ -61,19 +61,19 @@ interface ReportStats {
     lists: number;
 }
 
-const REASON_LABELS: Record<string, { label: string; color: string }> = {
-    spam: { label: 'Spam', color: 'bg-gray-500' },
-    harassment: { label: 'Insultes / Harcèlement', color: 'bg-red-500' },
-    sexual_content: { label: 'Contenu sexuel', color: 'bg-pink-500' },
-    unmarked_spoiler: { label: 'Spoiler non marqué', color: 'bg-yellow-500' },
-    impersonation: { label: "Usurpation d'identité", color: 'bg-purple-500' },
-    other: { label: 'Autre', color: 'bg-blue-500' },
+const REASON_LABELS: Record<string, { labelKey: string; color: string }> = {
+    spam: { labelKey: 'admin.reasonSpam', color: 'bg-gray-500' },
+    harassment: { labelKey: 'admin.reasonHarassment', color: 'bg-red-500' },
+    sexual_content: { labelKey: 'admin.reasonSexualContent', color: 'bg-pink-500' },
+    unmarked_spoiler: { labelKey: 'admin.reasonUnmarkedSpoiler', color: 'bg-yellow-500' },
+    impersonation: { labelKey: 'admin.reasonImpersonation', color: 'bg-purple-500' },
+    other: { labelKey: 'admin.reasonOther', color: 'bg-blue-500' },
 };
 
 const DEFAULT_STATS: ReportStats = { total: 0, pending: 0, resolved: 0, dismissed: 0, comments: 0, lists: 0 };
 
 const AdminReports: React.FC = () => {
-    const { t } = useTranslation();
+    const { t, i18n } = useTranslation();
     const [reports, setReports] = useState<Report[]>([]);
     const [stats, setStats] = useState<ReportStats>(DEFAULT_STATS);
     const [loading, setLoading] = useState(true);
@@ -155,11 +155,11 @@ const AdminReports: React.FC = () => {
             if (response.ok) {
                 setReports((prev) => prev.filter((r) => !(r.target_type === report.target_type && r.target_id === report.target_id)));
                 setStats((prev) => ({ ...prev, pending: Math.max(0, prev.pending - report.report_count), resolved: prev.resolved + report.report_count }));
-                sonnerToast.success(shouldDeleteContent ? 'Contenu supprimé et signalement résolu' : 'Signalement résolu');
+                sonnerToast.success(shouldDeleteContent ? t('admin.reportResolvedWithDeletion') : t('admin.reportResolved'));
             }
         } catch (error) {
             console.error('Erreur resolve:', error);
-            sonnerToast.error('Erreur lors de la résolution');
+            sonnerToast.error(t('admin.reportResolveError'));
         } finally {
             setSubmitting(null);
             setResolveModal(null);
@@ -177,11 +177,11 @@ const AdminReports: React.FC = () => {
             if (response.ok) {
                 setReports((prev) => prev.filter((r) => !(r.target_type === report.target_type && r.target_id === report.target_id)));
                 setStats((prev) => ({ ...prev, pending: Math.max(0, prev.pending - report.report_count), dismissed: prev.dismissed + report.report_count }));
-                sonnerToast.success('Signalement rejeté');
+                sonnerToast.success(t('admin.reportDismissed'));
             }
         } catch (error) {
             console.error('Erreur dismiss:', error);
-            sonnerToast.error('Erreur lors du rejet');
+            sonnerToast.error(t('admin.reportDismissError'));
         } finally {
             setSubmitting(null);
         }
@@ -189,7 +189,13 @@ const AdminReports: React.FC = () => {
 
     const formatDate = (timestamp: number) => {
         const date = new Date(timestamp);
-        return date.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+        return date.toLocaleDateString(i18n.resolvedLanguage || i18n.language || 'fr', {
+            day: '2-digit',
+            month: '2-digit',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+        });
     };
 
     const getTargetTypeIcon = (type: string) => {
@@ -203,9 +209,9 @@ const AdminReports: React.FC = () => {
 
     const getTargetTypeLabel = (type: string) => {
         switch (type) {
-            case 'comment': return 'Commentaire';
-            case 'reply': return 'Réponse';
-            case 'shared_list': return 'Liste partagée';
+            case 'comment': return t('admin.comments');
+            case 'reply': return t('admin.replies');
+            case 'shared_list': return t('admin.sharedLists');
             default: return type;
         }
     };
@@ -227,15 +233,15 @@ const AdminReports: React.FC = () => {
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <div className="bg-orange-500/10 border border-orange-500/20 rounded-xl p-4 text-center">
                     <div className="text-2xl font-bold text-orange-400">{stats.pending}</div>
-                    <div className="text-xs text-gray-400 mt-1">En attente</div>
+                    <div className="text-xs text-gray-400 mt-1">{t('admin.pending')}</div>
                 </div>
                 <div className="bg-green-500/10 border border-green-500/20 rounded-xl p-4 text-center">
                     <div className="text-2xl font-bold text-green-400">{stats.resolved}</div>
-                    <div className="text-xs text-gray-400 mt-1">Résolus</div>
+                    <div className="text-xs text-gray-400 mt-1">{t('admin.resolvedPlural')}</div>
                 </div>
                 <div className="bg-gray-500/10 border border-gray-500/20 rounded-xl p-4 text-center">
                     <div className="text-2xl font-bold text-gray-400">{stats.dismissed}</div>
-                    <div className="text-xs text-gray-400 mt-1">Rejetés</div>
+                    <div className="text-xs text-gray-400 mt-1">{t('admin.rejectedPlural')}</div>
                 </div>
                 <div className="bg-blue-500/10 border border-blue-500/20 rounded-xl p-4 text-center">
                     <div className="text-2xl font-bold text-blue-400">{stats.total}</div>
@@ -247,25 +253,25 @@ const AdminReports: React.FC = () => {
             <div className="flex flex-wrap gap-3 items-center">
                 <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v)}>
                     <SelectTrigger className="w-[160px] bg-gray-800 border-gray-700">
-                        <SelectValue placeholder="Statut" />
+                        <SelectValue placeholder={t('admin.status')} />
                     </SelectTrigger>
                     <SelectContent>
-                        <SelectItem value="pending">En attente</SelectItem>
-                        <SelectItem value="resolved">Résolus</SelectItem>
-                        <SelectItem value="dismissed">Rejetés</SelectItem>
-                        <SelectItem value="all">Tous</SelectItem>
+                        <SelectItem value="pending">{t('admin.pending')}</SelectItem>
+                        <SelectItem value="resolved">{t('admin.resolvedPlural')}</SelectItem>
+                        <SelectItem value="dismissed">{t('admin.rejectedPlural')}</SelectItem>
+                        <SelectItem value="all">{t('common.all')}</SelectItem>
                     </SelectContent>
                 </Select>
 
                 <Select value={typeFilter} onValueChange={(v) => setTypeFilter(v)}>
                     <SelectTrigger className="w-[180px] bg-gray-800 border-gray-700">
-                        <SelectValue placeholder="Type" />
+                        <SelectValue placeholder={t('admin.type')} />
                     </SelectTrigger>
                     <SelectContent>
-                        <SelectItem value="all">Tous les types</SelectItem>
-                        <SelectItem value="comment">Commentaires</SelectItem>
-                        <SelectItem value="reply">Réponses</SelectItem>
-                        <SelectItem value="shared_list">Listes partagées</SelectItem>
+                        <SelectItem value="all">{t('admin.allTypes')}</SelectItem>
+                        <SelectItem value="comment">{t('admin.comments')}</SelectItem>
+                        <SelectItem value="reply">{t('admin.replies')}</SelectItem>
+                        <SelectItem value="shared_list">{t('admin.sharedLists')}</SelectItem>
                     </SelectContent>
                 </Select>
 
@@ -280,9 +286,9 @@ const AdminReports: React.FC = () => {
                 <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-lg flex items-start gap-3">
                     <AlertCircle className="h-5 w-5 text-red-400 shrink-0 mt-0.5" />
                     <div>
-                        <p className="text-sm text-red-200 font-medium">Erreur de chargement</p>
+                        <p className="text-sm text-red-200 font-medium">{t('errors.loadingFailed')}</p>
                         <p className="text-xs text-red-100/70">{fetchError}</p>
-                        <p className="text-xs text-red-100/50 mt-1">Vérifiez que le serveur API est démarré et que la table reports existe.</p>
+                        <p className="text-xs text-red-100/50 mt-1">{t('admin.reportsApiHint')}</p>
                     </div>
                 </div>
             )}
@@ -295,7 +301,7 @@ const AdminReports: React.FC = () => {
             ) : groupedReports.length === 0 && !fetchError ? (
                 <div className="text-center py-12 text-gray-500">
                     <Flag className="w-12 h-12 mx-auto mb-3 opacity-30" />
-                    <p>Aucun signalement {statusFilter === 'pending' ? 'en attente' : ''}</p>
+                    <p>{statusFilter === 'pending' ? t('admin.noPendingReports') : t('admin.noReportsFound')}</p>
                 </div>
             ) : (
                 <div className="space-y-3">
@@ -333,18 +339,18 @@ const AdminReports: React.FC = () => {
                                                 </div>
 
                                                 <Badge className={`${reasonInfo.color} text-white text-[10px] px-2 py-0.5`}>
-                                                    {reasonInfo.label}
+                                                    {t(reasonInfo.labelKey)}
                                                 </Badge>
 
                                                 {report.report_count > 1 && (
                                                     <Badge className="bg-red-500/20 text-red-400 text-[10px] px-2 py-0.5 border border-red-500/30">
-                                                        {report.report_count} signalement{report.report_count > 1 ? 's' : ''}
+                                                        {t('admin.reportCountPlural', { count: report.report_count })}
                                                     </Badge>
                                                 )}
 
                                                 {report.status !== 'pending' && (
                                                     <Badge className={`text-[10px] px-2 py-0.5 ${report.status === 'resolved' ? 'bg-green-500/20 text-green-400' : 'bg-white/10 text-white/50'}`}>
-                                                        {report.status === 'resolved' ? 'Résolu' : 'Rejeté'}
+                                                        {report.status === 'resolved' ? t('admin.resolvedStatus') : t('admin.rejectedStatus')}
                                                     </Badge>
                                                 )}
 
@@ -391,7 +397,7 @@ const AdminReports: React.FC = () => {
                                             <div className="flex flex-wrap items-center gap-3 text-xs text-white/40">
                                                 <span className="flex items-center gap-1">
                                                     <User className="w-3 h-3" />
-                                                    Signalé par <span className="text-white/70">{report.reporter?.username || 'Inconnu'}</span>
+                                                    {t('admin.reportedBy')} <span className="text-white/70">{report.reporter?.username || t('common.unknown')}</span>
                                                 </span>
                                                 <span className="flex items-center gap-1">
                                                     <Clock className="w-3 h-3" />
@@ -410,7 +416,7 @@ const AdminReports: React.FC = () => {
                                                     disabled={submitting === report.id}
                                                 >
                                                     {submitting === report.id ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <Trash2 className="w-3 h-3 mr-1" />}
-                                                    Supprimer
+                                                    {t('common.delete')}
                                                 </Button>
                                                 <Button
                                                     size="sm"
@@ -419,7 +425,7 @@ const AdminReports: React.FC = () => {
                                                     disabled={submitting === report.id}
                                                 >
                                                     {submitting === report.id ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <XCircle className="w-3 h-3 mr-1" />}
-                                                    Ignorer
+                                                    {t('common.ignore')}
                                                 </Button>
                                                 <Button
                                                     size="sm"
@@ -429,7 +435,7 @@ const AdminReports: React.FC = () => {
                                                     className="border-green-600/50 text-green-400 hover:bg-green-600/10"
                                                 >
                                                     {submitting === report.id ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <CheckCircle className="w-3 h-3 mr-1" />}
-                                                    OK (garder)
+                                                    {t('admin.keepContent')}
                                                 </Button>
                                             </div>
                                         )}
@@ -446,7 +452,7 @@ const AdminReports: React.FC = () => {
                                 onClick={() => fetchReports(page + 1)}
                                 className="bg-gray-800 border-gray-700"
                             >
-                                Charger plus
+                                {t('common.seeMore')}
                             </Button>
                         </div>
                     )}
@@ -457,16 +463,16 @@ const AdminReports: React.FC = () => {
             <ReusableModal
                 isOpen={!!resolveModal}
                 onClose={() => setResolveModal(null)}
-                title="Supprimer le contenu signalé"
+                title={t('admin.deleteReportedContent')}
                 className="max-w-md"
             >
                 <div className="space-y-6">
                     <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-lg flex items-start gap-3">
                         <AlertCircle className="h-5 w-5 text-red-400 shrink-0 mt-0.5" />
                         <div>
-                            <p className="text-sm text-red-200 font-medium">Action irréversible</p>
+                            <p className="text-sm text-red-200 font-medium">{t('admin.irreversibleAction')}</p>
                             <p className="text-xs text-red-100/70">
-                                Le contenu sera supprimé et tous les signalements associés seront marqués comme résolus.
+                                {t('admin.deleteReportedContentDesc')}
                             </p>
                         </div>
                     </div>
@@ -497,7 +503,7 @@ const AdminReports: React.FC = () => {
                             disabled={submitting !== null}
                         >
                             {submitting !== null ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Trash2 className="h-4 w-4 mr-2" />}
-                            Supprimer définitivement
+                            {t('admin.deletePermanently')}
                         </Button>
                     </div>
                 </div>

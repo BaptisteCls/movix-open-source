@@ -98,33 +98,33 @@ const Header: React.FC = () => {
     {
       title: t('nav.movies'),
       items: [
-        { name: t('nav.collections'), path: '/collections', icon: <Film size={20} />, color: 'purple', desc: 'Explorez des collections thématiques' },
+        { name: t('nav.collections'), path: '/collections', icon: <Film size={20} />, color: 'purple', desc: t('nav.collectionsDesc') },
         { name: t('nav.roulette'), path: '/roulette', icon: <Dices size={20} />, color: 'red', desc: t('roulette.navDesc') },
-        { name: t('nav.greenlight'), path: '/wishboard', icon: <Lightbulb size={20} />, color: 'green', desc: 'Proposez vos demandes d\'ajouts' },
-        { name: t('nav.cinegraph'), path: '/cinegraph', icon: <Network size={20} />, color: 'blue', desc: 'Découvrez les connexions entre films' },
+        { name: t('nav.greenlight'), path: '/wishboard', icon: <Lightbulb size={20} />, color: 'green', desc: t('nav.greenlightDesc') },
+        { name: t('nav.cinegraph'), path: '/cinegraph', icon: <Network size={20} />, color: 'blue', desc: t('nav.cinegraphDesc') },
       ]
     },
     {
-      title: 'Social',
+      title: t('nav.social'),
       items: [
-        { name: t('nav.watchParty'), path: '/watchparty/list', icon: <Users size={20} />, color: 'orange', desc: 'Regardez ensemble en temps réel' },
-        { name: t('nav.sharedLists'), path: '/list-catalog', icon: <List size={20} />, color: 'indigo', desc: 'Listes créées par la communauté' },
-        { name: t('nav.suggestions'), path: '/suggestion', icon: <Star size={20} />, color: 'pink', desc: 'Découvrez de nouveaux films/séries' },
+        { name: t('nav.watchParty'), path: '/watchparty/list', icon: <Users size={20} />, color: 'orange', desc: t('nav.watchPartyDesc') },
+        { name: t('nav.sharedLists'), path: '/list-catalog', icon: <List size={20} />, color: 'indigo', desc: t('nav.sharedListsDesc') },
+        { name: t('nav.suggestions'), path: '/suggestion', icon: <Star size={20} />, color: 'pink', desc: t('nav.suggestionsDesc') },
       ]
     },
     {
-      title: 'Live',
+      title: t('nav.live'),
       items: [
-        { name: t('nav.liveTV'), path: '/live-tv', icon: <Tv size={20} />, color: 'red', desc: 'Chaînes TV en direct' },
-        ...(isVip ? [{ name: t('nav.francetv'), path: '/ftv', icon: <Radio size={20} />, color: 'sky' as const, desc: 'Replay et direct France TV' }] : []),
+        { name: t('nav.liveTV'), path: '/live-tv', icon: <Tv size={20} />, color: 'red', desc: t('nav.liveTVDesc') },
+        ...(isVip ? [{ name: t('nav.francetv'), path: '/ftv', icon: <Radio size={20} />, color: 'sky' as const, desc: t('nav.francetvDesc') }] : []),
       ]
     },
     {
-      title: 'Premium',
+      title: t('nav.premium'),
       items: [
-        ...(isVip ? [{ name: t('nav.debrid'), path: '/debrid', icon: <Unlock size={20} />, color: 'yellow' as const, desc: 'Débridez vos liens' }] : []),
-        { name: t('nav.settings'), path: '/settings', icon: <Settings size={20} />, color: 'gray', desc: 'Personnalisez votre expérience' },
-        { name: t('footer.ourUrls'), path: 'https://movix.help', icon: <ExternalLink size={20} />, color: 'gray', desc: 'Nos liens officiels', external: true },
+        ...(isVip ? [{ name: t('nav.debrid'), path: '/debrid', icon: <Unlock size={20} />, color: 'yellow' as const, desc: t('nav.debridDesc') }] : []),
+        { name: t('nav.settings'), path: '/settings', icon: <Settings size={20} />, color: 'gray', desc: t('nav.settingsDesc') },
+        { name: t('footer.ourUrls'), path: 'https://movix.help', icon: <ExternalLink size={20} />, color: 'gray', desc: t('nav.officialLinksDesc'), external: true },
       ]
     },
   ].filter(g => g.items.length > 0);

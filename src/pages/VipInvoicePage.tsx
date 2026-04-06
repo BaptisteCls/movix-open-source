@@ -37,6 +37,7 @@ import {
   getVipPaymentShortLabel,
   getVipStatusMeta
 } from '../utils/vipDonationsUi';
+import { rememberVipInvoice } from '../utils/vipInvoiceHistory';
 
 const STATUS_TONE: Record<VipInvoice['status'], string> = {
   awaiting_payment: 'bg-yellow-500/15 text-yellow-200 border-yellow-400/35',
@@ -66,12 +67,23 @@ const formatRemaining = (expiresAt: string | null, t: (key: string) => string) =
   return `${hours}h ${String(minutes).padStart(2, '0')}m ${String(seconds).padStart(2, '0')}s`;
 };
 
+const isInvoiceNotFoundError = (error: unknown) => (
+  error instanceof Error
+  && (
+    (typeof (error as { statusCode?: number }).statusCode === 'number' && (error as { statusCode?: number }).statusCode === 404)
+    || /invoice introuvable/i.test(error.message)
+  )
+);
+
 const VipInvoicePage: React.FC = () => {
   const { publicId } = useParams<{ publicId: string }>();
   const { t, i18n } = useTranslation();
   const [invoice, setInvoice] = useState<VipInvoice | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isChecking, setIsChecking] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [isMissingInvoice, setIsMissingInvoice] = useState(false);
+  const [reloadNonce, setReloadNonce] = useState(0);
   const [qrCodeUrl, setQrCodeUrl] = useState('');
   const [remaining, setRemaining] = useState(t('vipDonations.invoice.noExpiration'));
 
@@ -135,7 +147,17 @@ const VipInvoicePage: React.FC = () => {
   }, [invoice?.qrPayload]);
 
   useEffect(() => {
+    if (invoice?.publicId) {
+      rememberVipInvoice(invoice.publicId);
+    }
+  }, [invoice?.publicId]);
+
+  useEffect(() => {
     if (!publicId) {
+      setInvoice(null);
+      setLoadError(null);
+      setIsMissingInvoice(true);
+      setIsLoading(false);
       return;
     }
 
@@ -143,13 +165,25 @@ const VipInvoicePage: React.FC = () => {
 
     const load = async () => {
       try {
+        if (isMounted) {
+          setIsLoading(true);
+          setLoadError(null);
+          setIsMissingInvoice(false);
+        }
+
         const fetchedInvoice = await checkVipInvoice(publicId).catch(() => getVipInvoice(publicId));
         if (isMounted) {
           setInvoice(fetchedInvoice);
+          setLoadError(null);
+          setIsMissingInvoice(false);
         }
       } catch (error) {
         if (isMounted) {
-          toast.error(error instanceof Error ? error.message : t('vipDonations.invoice.loadError'));
+          const resolvedMessage = error instanceof Error ? error.message : t('vipDonations.invoice.loadError');
+          setInvoice(null);
+          setLoadError(isInvoiceNotFoundError(error) ? null : resolvedMessage);
+          setIsMissingInvoice(isInvoiceNotFoundError(error));
+          toast.error(resolvedMessage);
         }
       } finally {
         if (isMounted) {
@@ -163,10 +197,14 @@ const VipInvoicePage: React.FC = () => {
     return () => {
       isMounted = false;
     };
-  }, [publicId, t]);
+  }, [publicId, reloadNonce, t]);
 
   useEffect(() => {
     if (!publicId) {
+      return undefined;
+    }
+
+    if (!invoice || loadError || isMissingInvoice) {
       return undefined;
     }
 
@@ -184,7 +222,7 @@ const VipInvoicePage: React.FC = () => {
     }, 30000);
 
     return () => window.clearInterval(interval);
-  }, [invoiceStatus, publicId]);
+  }, [invoice, invoiceStatus, isMissingInvoice, loadError, publicId]);
 
   const handleCheckNow = async () => {
     if (!publicId) {
@@ -244,7 +282,33 @@ const VipInvoicePage: React.FC = () => {
     );
   }
 
-  if (!invoice) {
+  if (!invoice && loadError) {
+    return (
+      <SquareBackground squareSize={48} borderColor="rgba(234, 179, 8, 0.12)" className="min-h-screen bg-black text-white">
+        <div className="flex min-h-screen items-center justify-center px-4">
+          <AnimatedBorderCard highlightColor="239 68 68" backgroundColor="10 10 10" className="max-w-lg p-8 text-center">
+            <h1 className="text-2xl font-bold text-white">{t('vipDonations.invoice.loadError')}</h1>
+            <p className="mt-3 text-sm leading-6 text-white/60">{loadError}</p>
+            <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
+              <Button
+                className="bg-yellow-500 text-black hover:bg-yellow-400"
+                onClick={() => setReloadNonce((value) => value + 1)}
+              >
+                <RefreshCcw className="mr-2 h-4 w-4" />
+                {t('vipDonations.history.refreshButton')}
+              </Button>
+              <Link to="/vip/don" className="inline-flex items-center gap-2 text-sm font-semibold text-yellow-300 hover:text-yellow-200">
+                <ArrowLeft className="h-4 w-4" />
+                {t('vipDonations.invoice.backVip')}
+              </Link>
+            </div>
+          </AnimatedBorderCard>
+        </div>
+      </SquareBackground>
+    );
+  }
+
+  if (!invoice && isMissingInvoice) {
     return (
       <SquareBackground squareSize={48} borderColor="rgba(234, 179, 8, 0.12)" className="min-h-screen bg-black text-white">
         <div className="flex min-h-screen items-center justify-center px-4">
@@ -259,6 +323,10 @@ const VipInvoicePage: React.FC = () => {
         </div>
       </SquareBackground>
     );
+  }
+
+  if (!invoice) {
+    return null;
   }
 
   return (

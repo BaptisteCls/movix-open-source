@@ -355,7 +355,7 @@ const ContentRow: React.FC<ContentRowProps> = ({ title, items, mediaType, onLoad
           <button
             onClick={() => scroll('left')}
             className="absolute left-0 top-0 bottom-0 bg-gradient-to-r from-black to-transparent px-5 z-30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center h-full"
-            aria-label="Scroll left"
+            aria-label={t('genres.scrollLeft')}
           >
             <div className="bg-black/40 rounded-full p-2.5">
               <ChevronLeft className="w-6 h-6 text-white" />
@@ -428,14 +428,14 @@ const ContentRow: React.FC<ContentRowProps> = ({ title, items, mediaType, onLoad
                               addedAt: new Date().toISOString()
                             });
                             localStorage.setItem(storageKey, JSON.stringify(typeWatchlist));
-                            toast.success('Ajouté à la liste', { duration: 2000 });
+                            toast.success(t('search.addedToWatchlist'), { duration: 2000 });
                             const button = e.currentTarget;
                             button.querySelector('svg')?.classList.add('text-yellow-400');
                             button.querySelector('svg')?.setAttribute('fill', 'currentColor');
                           } else {
                             const updatedTypeWatchlist = typeWatchlist.filter((media: any) => media.id !== item.id);
                             localStorage.setItem(storageKey, JSON.stringify(updatedTypeWatchlist));
-                            toast.success('Retiré de la liste', { duration: 2000 });
+                            toast.success(t('search.removedFromWatchlist'), { duration: 2000 });
                             const button = e.currentTarget;
                             button.querySelector('svg')?.classList.remove('text-yellow-400');
                             button.querySelector('svg')?.setAttribute('fill', 'black');
@@ -468,7 +468,7 @@ const ContentRow: React.FC<ContentRowProps> = ({ title, items, mediaType, onLoad
                       </button>
                       <Link to={`/tv/${encodeId(item.id)}`} className="bg-black/60 border border-white/40 rounded-full p-2 transform transition-transform hover:scale-110 z-20 group/info relative">
                         <div className="absolute -top-8 left-1/2 transform -translate-x-1/2 bg-black text-white text-xs py-1 px-2 rounded opacity-0 group-hover/info:opacity-100 transition-opacity whitespace-nowrap hidden md:block">
-                          Voir l'affiche
+                          {t('common.viewPoster')}
                         </div>
                         <Info className="w-4 h-4 text-white" />
                       </Link>
@@ -515,7 +515,7 @@ const ContentRow: React.FC<ContentRowProps> = ({ title, items, mediaType, onLoad
           <button
             onClick={() => scroll('right')}
             className="absolute right-0 top-0 bottom-0 bg-gradient-to-l from-black to-transparent px-5 z-30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center h-full"
-            aria-label="Scroll right"
+            aria-label={t('genres.scrollRight')}
           >
             <div className="bg-black/40 rounded-full p-2.5">
               <ChevronRight className="w-6 h-6 text-white" />

@@ -5827,7 +5827,7 @@ const WatchTv: React.FC = () => {
                           )
                         ) : (
                           <div className="w-20 h-12 bg-gray-800 rounded flex items-center justify-center">
-                            <span className="text-sm text-gray-400">No image</span>
+                            <span className="text-sm text-gray-400">{t('watch.noImage')}</span>
                           </div>
                         )}
                         <div className="flex-1 text-left">

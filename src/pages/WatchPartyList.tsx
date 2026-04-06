@@ -218,7 +218,7 @@ const WatchPartyList: React.FC = () => {
                 <h3 className="font-semibold text-white">{t('watchParty.vipPlayersOnly')}</h3>
               </div>
               <p className="text-sm text-white/60">
-                {t('watchParty.vipPlayersOnlyDesc')} <Link to="/vip" className="text-red-400 hover:text-red-300 hover:underline">Page VIP</Link>
+                {t('watchParty.vipPlayersOnlyDesc')} <Link to="/vip" className="text-red-400 hover:text-red-300 hover:underline">{t('watchParty.vipPageLabel')}</Link>
               </p>
             </div>
           </div>
