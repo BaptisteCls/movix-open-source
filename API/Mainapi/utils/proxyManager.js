@@ -326,6 +326,28 @@ async function makeRequestWithCorsFallback(targetUrl, options = {}) {
   // Filtrer les proxies disponibles (non en cooldown)
   const availableProxies = getAvailableProxies(CLOUDFLARE_WORKERS_PROXIES);
 
+  if (availableProxies.length === 0) {
+    return axios.get(targetUrl, {
+      headers: {
+        'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'accept-language': 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7',
+        'priority': 'u=1, i',
+        'sec-ch-ua': '"Chromium";v="140", "Not=A?Brand";v="24", "Brave";v="140"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"Windows"',
+        'sec-fetch-dest': 'document',
+        'sec-fetch-mode': 'navigate',
+        'sec-fetch-site': 'cross-site',
+        'sec-gpc': '1',
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
+        ...headers
+      },
+      timeout,
+      decompress,
+      ...otherOptions
+    });
+  }
+
   // Utiliser directement les proxies Cloudflare Workers disponibles
   let lastError = null;
 
@@ -422,7 +444,16 @@ async function makeCoflixRequest(targetUrl, options = {}) {
   let lastError = null;
 
   if (proxyCandidates.length === 0) {
-    throw new Error('Aucun Cloudflare Worker proxy disponible pour Coflix');
+    return axios({
+      url: cleanTargetUrl,
+      method: otherOptions.method || 'GET',
+      headers: cleanHeaders,
+      timeout,
+      decompress,
+      responseType: 'text',
+      responseEncoding: 'utf8',
+      ...otherOptions
+    });
   }
 
   // Un 403/429 peut d\u00e9pendre du worker utilise : on tente chaque worker avant d'abandonner.
@@ -575,7 +606,23 @@ async function makeLecteurVideoRequest(targetUrl, options = {}) {
   } = pickLecteurVideoProxyCandidates();
 
   if (!proxies || proxies.length === 0) {
-    throw new Error('[LECTEURVIDEO] Aucun proxy disponible (HTTP_PROXIES / SOCKS5_PROXIES)');
+    const cycleTLS = await getCycleTLS();
+    const response = await cycleTLS(cleanTargetUrl, {
+      body: '',
+      ja3: CHROME_JA3,
+      userAgent: CHROME_UA,
+      headers: {
+        'Referer': 'https://coflix.space/',
+        'Origin': 'https://coflix.space',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'fr-FR,fr;q=0.9',
+        ...headers,
+      },
+      timeout: 15,
+    }, 'get');
+
+    const body = typeof response.body === 'string' ? response.body : JSON.stringify(response.body);
+    return { data: body, status: response.status, headers: response.headers || {} };
   }
 
   const cycleTLS = await getCycleTLS();

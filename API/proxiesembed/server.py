@@ -43,6 +43,34 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env'))
 
 
+def _load_json_env(env_name: str, fallback: Any) -> Any:
+    raw_value = os.environ.get(env_name)
+    if raw_value is None:
+        return fallback
+
+    raw_value = str(raw_value).strip()
+    if not raw_value:
+        return fallback
+
+    try:
+        return json.loads(raw_value)
+    except Exception:
+        logging.getLogger(__name__).warning(f"[config] Invalid JSON in {env_name}; using fallback")
+        return fallback
+
+
+def _get_env_int(env_name: str, fallback: int) -> int:
+    raw_value = str(os.environ.get(env_name, '') or '').strip()
+    if not raw_value:
+        return fallback
+
+    try:
+        return int(raw_value)
+    except (TypeError, ValueError):
+        logging.getLogger(__name__).warning(f"[config] Invalid integer in {env_name}; using fallback={fallback}")
+        return fallback
+
+
 def _build_socks5_proxy_url(proxy: Any, default_type: str = 'socks5h') -> Optional[str]:
     """Build a SOCKS proxy URL from either a raw url field or host/port/auth parts."""
     if not isinstance(proxy, dict):
@@ -83,6 +111,20 @@ def _build_aiohttp_socks_proxy_url(proxy: Any, default_type: str = 'socks5') -> 
     if proxy_url.lower().startswith('socks5h://'):
         return f"socks5://{proxy_url[10:]}"
     return proxy_url
+
+
+def _load_proxy_list_env(env_name: str) -> list:
+    parsed = _load_json_env(env_name, [])
+    if not isinstance(parsed, list):
+        return []
+    return [proxy for proxy in parsed if _build_socks5_proxy_url(proxy)]
+
+
+def _load_proxy_dict_env(env_name: str) -> Optional[Dict]:
+    parsed = _load_json_env(env_name, {})
+    if isinstance(parsed, dict) and _build_socks5_proxy_url(parsed):
+        return parsed
+    return None
 
 # ---------------------------------------------------------------------------
 #  WideFrog / DRM Proxy integration
@@ -157,7 +199,7 @@ def _build_ftv_proxy_session():
     (page download, manifest fetch, DRM token, auth).
     The actual video streaming goes through separate aiohttp sessions WITHOUT proxy.
     """
-    proxies_list = json.loads(os.environ.get('PROXIES_SOCKS5_JSON', '[]'))
+    proxies_list = _load_proxy_list_env('PROXIES_SOCKS5_JSON')
     if not proxies_list:
         return None
     # Pick a random proxy from the list
@@ -520,13 +562,13 @@ gc.set_threshold(50000, 500, 100)
 
 # Configuration
 PORT = 25569
-PROXY_BASE = os.environ.get("PROXY_BASE")
+PROXY_BASE = str(os.environ.get("PROXY_BASE", '') or '').strip()
 VIP_CACHE_TTL = 300  # Cache VIP check results for 5 minutes
 
 # MySQL configuration â€” same env vars as Node.js backend (API/.env)
 DB_CONFIG = {
     'host': os.environ.get('DB_HOST'),
-    'port': int(os.environ.get('DB_PORT')),
+    'port': _get_env_int('DB_PORT', 3306),
     'user': os.environ.get('DB_USER'),
     'password': os.environ.get('DB_PASSWORD'),
     'db': os.environ.get('DB_NAME'),
@@ -536,9 +578,9 @@ DB_CONFIG = {
 }
 
 # Proxies SOCKS5H configuration
-PROXIES = json.loads(os.environ.get('PROXIES_SOCKS5_JSON', '[]'))
+PROXIES = _load_proxy_list_env('PROXIES_SOCKS5_JSON')
 
-SIBNET_PROXY_CONFIG = json.loads(os.environ.get('SIBNET_PROXY_SOCKS5_JSON', '{"type":"socks5h"}'))
+SIBNET_PROXY_CONFIG = _load_proxy_dict_env('SIBNET_PROXY_SOCKS5_JSON')
 
 DEEPBRID_API_KEY = os.environ.get('DEEPBRID_API_KEY', '').strip()
 REAL_DEBRID_API_KEY = os.environ.get('REAL_DEBRID_API_KEY', '').strip()
@@ -1016,7 +1058,7 @@ class ProxyServer:
         
         # Proxy Sessions - Optimized for SOCKS5
         for i, proxy in enumerate(PROXIES):
-            if proxy and proxy.get('host') and proxy.get('port'):
+            if proxy and _build_socks5_proxy_url(proxy):
                 connector = self._create_socks5_connector(proxy)
                 self.sessions[f'proxy_{i}'] = aiohttp.ClientSession(
                     connector=connector,
@@ -1025,7 +1067,7 @@ class ProxyServer:
                 )
 
         # Sibnet Specific Session
-        if SIBNET_PROXY_CONFIG and SIBNET_PROXY_CONFIG.get('host') and SIBNET_PROXY_CONFIG.get('port'):
+        if SIBNET_PROXY_CONFIG and _build_socks5_proxy_url(SIBNET_PROXY_CONFIG):
             sibnet_connector = self._create_socks5_connector(SIBNET_PROXY_CONFIG)
             self.sessions['sibnet'] = aiohttp.ClientSession(
                 connector=sibnet_connector,
@@ -2805,11 +2847,11 @@ class ProxyServer:
         session = self.sessions['normal']
         if use_proxy:
             if specific_proxy and specific_proxy == SIBNET_PROXY:
-                session = self.sessions['proxy_0']
+                session = self.sessions.get('proxy_0', self.sessions['normal'])
             elif specific_proxy and specific_proxy == VIDMOLY_PROXY:
-                session = self.sessions['proxy_1']
+                session = self.sessions.get('proxy_1', self.sessions.get('proxy_0', self.sessions['normal']))
             else:
-                session = self.sessions['proxy_0'] # Default proxy
+                session = self.sessions.get('proxy_0', self.sessions['normal']) # Default proxy
                 
         timeout = ClientTimeout(total=timeout_seconds)
         

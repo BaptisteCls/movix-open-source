@@ -286,6 +286,36 @@ async function axiosDarkinoRequest(config) {
     [darkinoProxies[i], darkinoProxies[j]] = [darkinoProxies[j], darkinoProxies[i]];
   }
 
+  if (darkinoProxies.length === 0) {
+    try {
+      const response = await axios({
+        ...config,
+        url: requestUrl,
+        headers: darkinoRequestHeaders,
+        timeout: 5000,
+        withCredentials: false,
+        decompress: true
+      });
+
+      const setCookieHeader = response.headers['set-cookie'];
+      if (setCookieHeader && deps.cookieJar) {
+        await Promise.all(setCookieHeader.map(cookie => deps.cookieJar.setCookie(cookie, DARKIWORLD_BASE_URL)));
+      }
+      return response;
+    } catch (error) {
+      console.error(`[DARKINO REQUEST][DIRECT NO PROXY ERROR] ${String(config.method || 'get').toUpperCase()} ${config.url}`, summarizeRequestErrorForLog(error));
+      if (error.response && error.response.headers['set-cookie'] && deps.cookieJar) {
+        const setCookieHeader = error.response.headers['set-cookie'];
+        await Promise.all(setCookieHeader.map(cookie => deps.cookieJar.setCookie(cookie, DARKIWORLD_BASE_URL)));
+      }
+      if (error.response?.status === 403) {
+        proxyManager.darkino403CooldownUntil = Date.now() + DARKINO_403_COOLDOWN_MS;
+        console.log(`[DARKINO] Erreur 403 d\u00e9tect\u00e9e (direct sans proxy) - Cooldown activ\u00e9 pour 5 minutes`);
+      }
+      throw error;
+    }
+  }
+
   let lastError = null;
   const maxRetries = 1; // Une seule tentative
 
@@ -479,6 +509,26 @@ async function axiosFStreamRequest(config) {
   if (DARKINO_PROXIES && DARKINO_PROXIES.length > 0) {
     DARKINO_PROXIES.forEach(p => allProxies.push({ proxy: p, type: 'darkino' }));
   }
+
+  if (allProxies.length === 0) {
+    await deps.ensureFStreamSession();
+    const existingHeaders = config.headers || {};
+    const cookieHeader = Object.entries(deps.fstreamCookies)
+      .filter(([, v]) => v !== '' && v != null)
+      .map(([k, v]) => `${k}=${v}`)
+      .join('; ');
+    const response = await deps.axiosFStream({
+      ...config,
+      timeout: 8000,
+      headers: {
+        ...existingHeaders,
+        'Cookie': existingHeaders['Cookie'] || cookieHeader
+      }
+    });
+    deps.incrementFstreamRequestCounter();
+    return response;
+  }
+
   const entry = allProxies[Math.floor(Math.random() * allProxies.length)];
   const proxyLabel = `${entry.type}:${entry.proxy.host}:${entry.proxy.port}`;
 
@@ -740,6 +790,27 @@ async function axiosWiflixRequest(config) {
   };
 
   let lastError = null;
+
+  if (availableProxies.length === 0) {
+    try {
+      const { url: _, headers: __, ...restConfig } = config;
+      return await axios({
+        url: absoluteUrl,
+        method: restConfig.method || 'GET',
+        headers: defaultHeaders,
+        timeout: restConfig.timeout || 15000,
+        decompress: true,
+        responseType: restConfig.responseType || 'text',
+        ...restConfig
+      });
+    } catch (error) {
+      error.wiflixUrl = absoluteUrl;
+      error.wiflixProxy = 'Direct (sans proxy)';
+      error.wiflixProxiedUrl = absoluteUrl;
+      console.error(`[WIFLIX REQUEST] Erreur: ${error.message}`);
+      throw error;
+    }
+  }
 
   // Essayer avec les proxies Cloudflare disponibles
   for (let i = 0; i < availableProxies.length; i++) {

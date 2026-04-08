@@ -17,7 +17,7 @@ app = Flask(__name__)
 # --- Configuration ---
 PORT = 25568
 # SOCKS5 Proxy definition
-PROXY_SOCKS = os.environ.get("BYPASS403_SOCKS5_PROXY_URL", "")
+PROXY_SOCKS = os.environ.get("BYPASS403_SOCKS5_PROXY_URL", "").strip()
 
 # --- In-Memory Cache (Simple & Light) ---
 # Stores: { url: {'content': bytes, 'ts': timestamp, 'headers': list, 'status': int} }
@@ -132,7 +132,7 @@ def proxy(target):
 
     # 5. Execute Request
     try:
-        proxies = {'http': PROXY_SOCKS, 'https': PROXY_SOCKS} if use_proxy else None
+        proxies = {'http': PROXY_SOCKS, 'https': PROXY_SOCKS} if use_proxy and PROXY_SOCKS else None
         
         resp = session.request(
             method=request.method,
@@ -140,41 +140,27 @@ def proxy(target):
             headers=req_headers,
             data=request.get_data(),
             cookies=request.cookies,
-            stream=True,     # Stream content
             timeout=20,      # Fast timeout
             verify=False,    # Ignore SSL errors for speed/compat
             proxies=proxies
         )
 
-        # 6. Stream & Cache Response
+        # 6. Buffer & Cache Response
         excluded_headers = ['content-encoding', 'content-length', 'transfer-encoding', 'connection']
         resp_headers = [(k, v) for k, v in resp.headers.items() if k.lower() not in excluded_headers]
+        body = resp.content
+        resp.close()
 
-        # Logic to decide if we cache this response
-        should_cache = (request.method == "GET" and resp.status_code == 200)
-        cache_data = []
-        current_size = 0
+        should_cache = (
+            request.method == "GET" and
+            resp.status_code == 200 and
+            len(body) <= MAX_BODY_SIZE
+        )
 
-        def generate():
-            nonlocal should_cache, current_size
-            try:
-                for chunk in resp.iter_content(chunk_size=4096):
-                    if chunk:
-                        if should_cache:
-                            current_size += len(chunk)
-                            if current_size <= MAX_BODY_SIZE:
-                                cache_data.append(chunk)
-                            else:
-                                should_cache = False # Exceeded limit
-                        yield chunk
-            finally:
-                resp.close()
-                # On stream end, save to cache if eligible
-                if should_cache and current_size > 0:
-                    full_body = b"".join(cache_data)
-                    set_cached(target_url, full_body, resp_headers, resp.status_code)
+        if should_cache:
+            set_cached(target_url, body, resp_headers, resp.status_code)
 
-        return Response(generate(), status=resp.status_code, headers=resp_headers)
+        return Response(body, status=resp.status_code, headers=resp_headers)
 
     except Exception as e:
         # Quiet error handling
