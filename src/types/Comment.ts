@@ -6,7 +6,7 @@ export interface Reaction {
 
 export interface Notification {
   id: string;
-  type: 'reply' | 'like' | 'mention';
+  type: 'reply' | 'like' | 'mention' | 'report_resolved' | 'report_resolved_deleted' | 'report_dismissed';
   commentId: string;
   replyId?: string;
   content: string;

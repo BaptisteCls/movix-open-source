@@ -1,4 +1,4 @@
-import React, { useLayoutEffect, useEffect, useState, useCallback } from 'react';
+import React, { useLayoutEffect, useEffect, useState, useCallback, useRef, startTransition } from 'react';
 import { useTranslation } from 'react-i18next';
 import i18n from '../i18n';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -69,11 +69,26 @@ interface GlobalStats {
 
 type TabType = 'movies' | 'tv' | 'anime';
 
+interface Top10OverviewResponse {
+  success: boolean;
+  type: TabType;
+  top10: Top10Entry[];
+  stats: GlobalStats | null;
+  updatedAt: string | null;
+}
+
 const tabs: { id: TabType; labelKey: string; icon: React.ReactNode; color: string }[] = [
   { id: 'movies', labelKey: 'top10.movies', icon: <Film className="w-4 h-4" />, color: '#f59e0b' },
   { id: 'tv', labelKey: 'top10.tvShows', icon: <Tv className="w-4 h-4" />, color: '#6366f1' },
   { id: 'anime', labelKey: 'top10.anime', icon: <Sparkles className="w-4 h-4" />, color: '#ec4899' },
 ];
+
+const tabIds: TabType[] = ['movies', 'tv', 'anime'];
+const emptyTop10ByTab: Record<TabType, Top10Entry[]> = { movies: [], tv: [], anime: [] };
+const emptyStatsByTab: Record<TabType, GlobalStats | null> = { movies: null, tv: null, anime: null };
+const emptyBooleanByTab: Record<TabType, boolean> = { movies: false, tv: false, anime: false };
+const emptyErrorByTab: Record<TabType, string | null> = { movies: null, tv: null, anime: null };
+const emptyUpdatedAtByTab: Record<TabType, string | null> = { movies: null, tv: null, anime: null };
 
 // Rank badge colors
 const rankColors: Record<number, { bg: string; text: string; border: string; glow: string }> = {
@@ -95,20 +110,18 @@ const methodologyItems = [
 const Top10Page: React.FC = () => {
   const { t, i18n } = useTranslation();
   const [activeTab, setActiveTab] = useState<TabType>('movies');
-  const [top10Data, setTop10Data] = useState<Record<TabType, Top10Entry[]>>({
-    movies: [],
-    tv: [],
-    anime: [],
-  });
-  const [statsByTab, setStatsByTab] = useState<Record<TabType, GlobalStats | null>>({
-    movies: null,
-    tv: null,
-    anime: null,
-  });
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [top10Data, setTop10Data] = useState<Record<TabType, Top10Entry[]>>(emptyTop10ByTab);
+  const [statsByTab, setStatsByTab] = useState<Record<TabType, GlobalStats | null>>(emptyStatsByTab);
+  const [loadingTabs, setLoadingTabs] = useState<Record<TabType, boolean>>(emptyBooleanByTab);
+  const [loadedTabs, setLoadedTabs] = useState<Record<TabType, boolean>>(emptyBooleanByTab);
+  const [errorsByTab, setErrorsByTab] = useState<Record<TabType, string | null>>(emptyErrorByTab);
   const [openFaq, setOpenFaq] = useState<number | null>(null);
-  const [lastUpdated, setLastUpdated] = useState<string | null>(null);
+  const [updatedAtByTab, setUpdatedAtByTab] = useState<Record<TabType, string | null>>(emptyUpdatedAtByTab);
+  const loadedTabsRef = useRef<Record<TabType, boolean>>(emptyBooleanByTab);
+  const statsByTabRef = useRef<Record<TabType, GlobalStats | null>>(emptyStatsByTab);
+  const top10RequestsRef = useRef<Set<TabType>>(new Set());
+  const statsRequestsRef = useRef<Set<TabType>>(new Set());
+  const overviewRequestsRef = useRef<Set<TabType>>(new Set());
 
   // Hide footer
   useLayoutEffect(() => {
@@ -129,54 +142,172 @@ const Top10Page: React.FC = () => {
     return () => clearInterval(interval);
   }, []);
 
-  // Fetch data
-  const fetchTop10 = useCallback(async (type: TabType) => {
-    try {
-      const response = await fetch(`${MAIN_API}/api/top10/${type}`);
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const data = await response.json();
-      if (data.success) {
-        setTop10Data(prev => ({ ...prev, [type]: data.top10 }));
-        setLastUpdated(data.updatedAt);
-      }
-    } catch (err) {
-      console.error(`[Top10] Error fetching ${type}:`, err);
-      setError('top10.loadError');
-    }
-  }, []);
-
-  const fetchStats = useCallback(async (type: TabType) => {
-    try {
-      const response = await fetch(`${MAIN_API}/api/top10/stats?type=${type}`);
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const data = await response.json();
-      if (data.success) {
-        setStatsByTab(prev => ({ ...prev, [type]: data.stats }));
-      }
-    } catch (err) {
-      console.error(`[Top10] Error fetching stats ${type}:`, err);
-    }
-  }, []);
+  useEffect(() => {
+    loadedTabsRef.current = loadedTabs;
+  }, [loadedTabs]);
 
   useEffect(() => {
-    const loadAll = async () => {
-      setLoading(true);
-      await Promise.all([
-        fetchTop10('movies'),
-        fetchTop10('tv'),
-        fetchTop10('anime'),
-        fetchStats('movies'),
-        fetchStats('tv'),
-        fetchStats('anime'),
-      ]);
-      setLoading(false);
+    statsByTabRef.current = statsByTab;
+  }, [statsByTab]);
+
+  const applyOverviewPayload = useCallback((
+    type: TabType,
+    payload: { top10?: Top10Entry[]; stats?: GlobalStats | null; updatedAt?: string | null },
+    options?: { background?: boolean; markLoaded?: boolean; clearError?: boolean },
+  ) => {
+    const commit = () => {
+      if (payload.top10 !== undefined) {
+        setTop10Data(prev => ({ ...prev, [type]: payload.top10! }));
+      }
+      if (payload.stats !== undefined) {
+        setStatsByTab(prev => ({ ...prev, [type]: payload.stats ?? null }));
+      }
+      if (payload.updatedAt !== undefined) {
+        setUpdatedAtByTab(prev => ({ ...prev, [type]: payload.updatedAt ?? null }));
+      }
+      if (options?.markLoaded) {
+        setLoadedTabs(prev => ({ ...prev, [type]: true }));
+      }
+      if (options?.clearError) {
+        setErrorsByTab(prev => ({ ...prev, [type]: null }));
+      }
     };
-    loadAll();
+
+    if (options?.background) {
+      startTransition(commit);
+      return;
+    }
+
+    commit();
+  }, []);
+
+  // Fetch data
+  const fetchTop10 = useCallback(async (type: TabType, options?: { background?: boolean; signal?: AbortSignal }) => {
+    if (loadedTabsRef.current[type] || top10RequestsRef.current.has(type)) return;
+
+    top10RequestsRef.current.add(type);
+    setLoadingTabs(prev => ({ ...prev, [type]: true }));
+
+    try {
+      const response = await fetch(`${MAIN_API}/api/top10/${type}`, { signal: options?.signal });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      if (data.success) {
+        applyOverviewPayload(
+          type,
+          { top10: data.top10, updatedAt: data.updatedAt ?? null },
+          { background: options?.background, markLoaded: true, clearError: true },
+        );
+      }
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return;
+      console.error(`[Top10] Error fetching ${type}:`, err);
+      setErrorsByTab(prev => ({ ...prev, [type]: 'top10.loadError' }));
+    } finally {
+      top10RequestsRef.current.delete(type);
+      setLoadingTabs(prev => ({ ...prev, [type]: false }));
+    }
+  }, [applyOverviewPayload]);
+
+  const fetchStats = useCallback(async (type: TabType, options?: { background?: boolean; signal?: AbortSignal }) => {
+    if (statsByTabRef.current[type] || statsRequestsRef.current.has(type)) return;
+
+    statsRequestsRef.current.add(type);
+
+    try {
+      const response = await fetch(`${MAIN_API}/api/top10/stats?type=${type}`, { signal: options?.signal });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      if (data.success) {
+        applyOverviewPayload(
+          type,
+          { stats: data.stats ?? null },
+          { background: options?.background },
+        );
+      }
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return;
+      console.error(`[Top10] Error fetching stats ${type}:`, err);
+    } finally {
+      statsRequestsRef.current.delete(type);
+    }
+  }, [applyOverviewPayload]);
+
+  const fetchOverview = useCallback(async (type: TabType, options?: { background?: boolean; signal?: AbortSignal }) => {
+    if (loadedTabsRef.current[type] || overviewRequestsRef.current.has(type)) return;
+
+    overviewRequestsRef.current.add(type);
+    setLoadingTabs(prev => ({ ...prev, [type]: true }));
+
+    try {
+      const response = await fetch(`${MAIN_API}/api/top10/overview?type=${type}`, { signal: options?.signal });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data: Top10OverviewResponse = await response.json();
+      if (data.success) {
+        applyOverviewPayload(
+          type,
+          {
+            top10: data.top10,
+            stats: data.stats ?? null,
+            updatedAt: data.updatedAt ?? null,
+          },
+          { background: options?.background, markLoaded: true, clearError: true },
+        );
+      }
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return;
+      console.error(`[Top10] Error fetching overview ${type}:`, err);
+      setErrorsByTab(prev => ({ ...prev, [type]: 'top10.loadError' }));
+    } finally {
+      overviewRequestsRef.current.delete(type);
+      setLoadingTabs(prev => ({ ...prev, [type]: false }));
+    }
+  }, [applyOverviewPayload]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void fetchTop10('movies', { signal: controller.signal });
+    void fetchStats('movies', { background: true, signal: controller.signal });
+    return () => controller.abort();
   }, [fetchTop10, fetchStats]);
+
+  useEffect(() => {
+    if (!loadedTabs[activeTab]) {
+      if (top10RequestsRef.current.has(activeTab) || overviewRequestsRef.current.has(activeTab)) return;
+      void fetchOverview(activeTab);
+      return;
+    }
+
+    if (!statsByTab[activeTab] && !statsRequestsRef.current.has(activeTab)) {
+      void fetchStats(activeTab, { background: true });
+    }
+  }, [activeTab, loadedTabs, statsByTab, fetchOverview, fetchStats]);
+
+  useEffect(() => {
+    if (!loadedTabs[activeTab]) return;
+
+    const remainingTabs = tabIds.filter(tab => tab !== activeTab && !loadedTabs[tab]);
+    if (remainingTabs.length === 0) return;
+
+    const timers = remainingTabs.map((tab, index) =>
+      window.setTimeout(() => {
+        if (!loadedTabsRef.current[tab]) {
+          void fetchOverview(tab, { background: true });
+        }
+      }, 400 + index * 250),
+    );
+
+    return () => {
+      timers.forEach(timer => window.clearTimeout(timer));
+    };
+  }, [activeTab, loadedTabs, fetchOverview]);
 
   const activeTabConfig = tabs.find(t => t.id === activeTab)!;
   const currentData = top10Data[activeTab];
   const currentStats = statsByTab[activeTab];
+  const currentError = errorsByTab[activeTab];
+  const isCurrentTabLoading = loadingTabs[activeTab] && !loadedTabs[activeTab];
+  const lastUpdated = updatedAtByTab[activeTab];
 
   // Compute average vote from current tab's data
   const avgVote = (() => {
@@ -302,15 +433,15 @@ const Top10Page: React.FC = () => {
 
         {/* Top 10 List */}
         <div className="max-w-4xl mx-auto mb-20">
-          {loading ? (
+          {isCurrentTabLoading ? (
             <div className="space-y-4">
               {Array.from({ length: 5 }).map((_, i) => (
                 <div key={i} className="h-28 rounded-xl bg-white/[0.03] animate-pulse" />
               ))}
             </div>
-          ) : error ? (
+          ) : currentError ? (
             <AnimatedBorderCard highlightColor="239 68 68" backgroundColor="10 10 10" className="p-8 text-center">
-              <p className="text-red-400">{t(error)}</p>
+              <p className="text-red-400">{t(currentError)}</p>
             </AnimatedBorderCard>
           ) : currentData.length === 0 ? (
             <AnimatedBorderCard highlightColor="99 102 241" backgroundColor="10 10 10" className="p-12 text-center">
@@ -376,6 +507,8 @@ const Top10Page: React.FC = () => {
                                   src={`${TMDB_IMAGE_URL}/w185${entry.posterPath}`}
                                   alt={entry.title}
                                   className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
+                                  decoding="async"
+                                  fetchPriority={entry.rank <= 3 ? 'high' : 'low'}
                                   loading="lazy"
                                 />
                               ) : (
@@ -446,7 +579,7 @@ const Top10Page: React.FC = () => {
           )}
 
           {/* Last updated */}
-          {lastUpdated && !loading && (
+          {lastUpdated && !isCurrentTabLoading && (
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}

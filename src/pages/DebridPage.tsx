@@ -1,4 +1,4 @@
-import React, { useLayoutEffect, useEffect, useState, useRef, useCallback } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Link, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, Crown, Download, Copy, Check, AlertCircle, Loader, Link as LinkIcon, Info, Clock, Trash2 } from 'lucide-react';
@@ -281,25 +281,6 @@ const DebridPage: React.FC = () => {
   const [showHistory, setShowHistory] = useState(true);
   const isVip = localStorage.getItem('is_vip') === 'true';
   const hasAutoDebrided = useRef(false);
-
-  useLayoutEffect(() => {
-    const footer = document.querySelector('footer');
-    if (footer) footer.style.display = 'none';
-    document.body.classList.add('no-footer-page');
-    return () => {
-      const footer = document.querySelector('footer');
-      if (footer) footer.style.display = '';
-      document.body.classList.remove('no-footer-page');
-    };
-  }, []);
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const footer = document.querySelector('footer');
-      if (footer && footer.style.display !== 'none') footer.style.display = 'none';
-    }, 100);
-    return () => clearInterval(interval);
-  }, []);
 
   const providerOptions: DebridProvider[] = ['deepbrid', 'realdebrid', 'bestdebrid'];
   const isSubmitDisabled = isLoading || !url.trim();

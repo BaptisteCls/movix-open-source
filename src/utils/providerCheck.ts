@@ -10,7 +10,7 @@ const PROVIDERS = {
   FREMBED: {
     id: 'frembed',
     name: 'Frembed',
-    checkUrl: 'https://frembed.bond/api/public/v1'
+    checkUrl: 'https://frembed.help/api/public/v1'
   },
   STREAMTAPE: {
     id: 'streamtape',

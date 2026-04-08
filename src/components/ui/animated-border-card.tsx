@@ -1,4 +1,4 @@
-import React, { CSSProperties, memo, useEffect, useMemo, useRef } from 'react';
+import React, { CSSProperties, memo, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 
 interface AnimatedBorderCardProps extends React.HTMLAttributes<HTMLDivElement> {
     children: React.ReactNode;
@@ -109,10 +109,14 @@ const syncCardBorderOrbitSize = (card: HTMLElement, width: number, height: numbe
     const largestSide = Math.max(width, height);
 
     if (!Number.isFinite(largestSide) || largestSide <= 0) {
-        return;
+        card.style.removeProperty('--border-orbit-size');
+        card.style.setProperty('--border-visibility', '0');
+        return false;
     }
 
     card.style.setProperty('--border-orbit-size', `${Math.ceil(largestSide * 2)}px`);
+    card.style.setProperty('--border-visibility', '1');
+    return true;
 };
 
 const shallowEqualStyle = (
@@ -197,7 +201,7 @@ const AnimatedBorderCardComponent = ({
         [backgroundColor]
     );
 
-    useEffect(() => {
+    useLayoutEffect(() => {
         const container = containerRef.current;
         if (!container) {
             return;
@@ -224,9 +228,13 @@ const AnimatedBorderCardComponent = ({
 
         syncCurrentSize();
 
+        const rafId = requestAnimationFrame(syncCurrentSize);
+
         if (typeof ResizeObserver === 'undefined') {
             return () => {
+                cancelAnimationFrame(rafId);
                 container.style.removeProperty('--border-orbit-size');
+                container.style.removeProperty('--border-visibility');
             };
         }
 
@@ -243,8 +251,10 @@ const AnimatedBorderCardComponent = ({
         resizeObserver.observe(container);
 
         return () => {
+            cancelAnimationFrame(rafId);
             resizeObserver.disconnect();
             container.style.removeProperty('--border-orbit-size');
+            container.style.removeProperty('--border-visibility');
         };
     }, []);
 

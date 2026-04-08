@@ -38,6 +38,8 @@
   border-radius: 999px;
   background: var(--border-color, var(--highlight-gradient));
   transform: translate3d(-50%, -50%, 0) rotate(0deg);
+  opacity: var(--border-visibility, 0);
+  transition: opacity 160ms ease-out;
   pointer-events: none;
   z-index: -2;
 }

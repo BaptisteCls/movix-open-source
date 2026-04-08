@@ -687,9 +687,13 @@ router.get('/generate/:year', verifyToken, generateRateLimit, async (req, res) =
 
             // 3. Top Content (Top 10 — replaces old top5 + top10-genres queries)
             timedQuery('topContent', () => pool.execute(`
-                SELECT content_title, content_id, content_type, ROUND(SUM(watch_duration) / 60) as duration
+                SELECT
+                    COALESCE(MAX(NULLIF(content_title, '')), MAX(content_title)) as content_title,
+                    content_id,
+                    content_type,
+                    ROUND(SUM(watch_duration) / 60) as duration
                 FROM wrapped_viewing_data ${whereClause}
-                GROUP BY content_title, content_id, content_type
+                GROUP BY content_id, content_type
                 ORDER BY duration DESC LIMIT 10
             `, queryParams)),
 

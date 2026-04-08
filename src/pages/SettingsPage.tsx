@@ -5,7 +5,7 @@ import { useLocation, useNavigate, Link } from 'react-router-dom';
 import {
   ArrowLeft, Settings, Shield, Monitor, Smartphone, Tablet,
   Copy, X, Snowflake, Activity, Trash2, Crown, Volume2,
-  Database, Key, Lock, Palette, Eye, Download, Upload, Globe, AlertTriangle, History, CalendarClock, FlaskConical, Link2
+  Database, Key, Lock, Palette, Eye, Download, Upload, Globe, AlertTriangle, History, CalendarClock, FlaskConical, Link2, MessageCircle
 } from 'lucide-react';
 import axios from 'axios';
 import { useAuth } from '../context/AuthContext';
@@ -223,6 +223,9 @@ const SettingsPage: React.FC = () => {
 
   const [historyDisabled, setHistoryDisabled] = useState(() => {
     return localStorage.getItem('settings_disable_history') === 'true';
+  });
+  const [commentsSectionHidden, setCommentsSectionHidden] = useState(() => {
+    return localStorage.getItem('settings_hide_comments_section') === 'true';
   });
   const [showHistoryConfirm, setShowHistoryConfirm] = useState(false);
   const [showDataCollectionConfirm, setShowDataCollectionConfirm] = useState(false);
@@ -631,6 +634,13 @@ const SettingsPage: React.FC = () => {
       setHistoryDisabled(false);
       localStorage.setItem('settings_disable_history', 'false');
     }
+  };
+
+  const handleCommentsSectionToggle = () => {
+    const newValue = !commentsSectionHidden;
+    setCommentsSectionHidden(newValue);
+    localStorage.setItem('settings_hide_comments_section', String(newValue));
+    window.dispatchEvent(new CustomEvent('comments_section_visibility_changed'));
   };
 
   const confirmDisableHistory = () => {
@@ -1192,6 +1202,25 @@ const SettingsPage: React.FC = () => {
                     </p>
                   </div>
                   {renderToggle(soundEffectsEnabled, handleSoundEffectsToggle)}
+                </motion.div>
+
+                {/* Section commentaires */}
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.1375 }}
+                  className="flex items-center justify-between p-4 bg-gray-800/30 rounded-xl border border-gray-700/40 hover:border-gray-600/50 transition-all group"
+                >
+                  <div className="flex-1 mr-4">
+                    <div className="flex items-center gap-2 mb-0.5">
+                      <MessageCircle className="w-3.5 h-3.5 text-blue-400" />
+                      <h4 className="font-medium text-white text-sm">{t('settings.hideCommentsSection')}</h4>
+                    </div>
+                    <p className="text-xs text-gray-500 leading-relaxed">
+                      {t('settings.hideCommentsSectionDesc')}
+                    </p>
+                  </div>
+                  {renderToggle(commentsSectionHidden, handleCommentsSectionToggle, 'blue')}
                 </motion.div>
 
                 {/* Effet neige */}
@@ -1854,6 +1883,7 @@ const SettingsPage: React.FC = () => {
                   </div>
                   {renderToggle(historyDisabled, handleHistoryToggle, 'blue')}
                 </div>
+
               </motion.div>
 
               {/* Confirmation modal for disabling history */}

@@ -8,13 +8,13 @@ import Search from './pages/Search';
 import MovieDetails from './pages/MovieDetails';
 import TVDetails from './pages/TVDetails';
 import Movies from './pages/Movies';
+import Anime from './pages/Anime';
 import TVShows from './pages/TVShows';
 import Collections from './pages/Collections';
 import CollectionDetails from './pages/CollectionDetails';
 import GenrePage from './pages/GenrePage';
 import WatchMovie from './pages/Watch/WatchMovie';
 import WatchTv from './pages/Watch/WatchTv';
-import { Analytics } from "@vercel/analytics/react"
 import ProviderContent from './pages/ProviderContent';
 import ProviderCatalogPage from './pages/ProviderCatalogPage';
 import RoulettePage from './pages/RoulettePage';
@@ -82,7 +82,7 @@ import AprilFoolsAdminPage from './pages/AprilFoolsAdminPage';
 import ScreenSaver from './components/ScreenSaver';
 import { useIdleTimer } from './hooks/useIdleTimer';
 import { startVipVerification } from './utils/vipUtils';
-import { getResolvedAccountContext } from './utils/accountAuth';
+import { broadcastAuthChange, clearStoredAuthSession, getResolvedAccountContext } from './utils/accountAuth';
 import { isSyncableStorageKey } from './utils/syncStorage';
 import i18n, { detectInitialLanguage } from './i18n';
 import { useTranslation } from 'react-i18next';
@@ -131,7 +131,10 @@ detectInitialLanguage();
           // Marquer qu'on est en train de faire un clear forcé pour éviter le sync
           (window as any).__forceClearInProgress = true;
 
-          try { localStorage.clear(); } catch { }
+          try {
+            clearStoredAuthSession();
+            broadcastAuthChange();
+          } catch { }
           try { sessionStorage.clear(); } catch { }
 
           // Réinitialiser le flag après un court délai
@@ -563,6 +566,8 @@ const PersistenceManager = () => {
       }
     };
 
+    const handleAuthChanged = () => handleStorageChange(null);
+
     // Initialize current user info
     currentUserInfo.current = getUserInfo();
 
@@ -570,11 +575,11 @@ const PersistenceManager = () => {
     window.addEventListener('storage', handleStorageChange);
 
     // Listen for our custom event for changes within this tab
-    window.addEventListener('auth_changed', () => handleStorageChange(null));
+    window.addEventListener('auth_changed', handleAuthChanged);
 
     return () => {
       window.removeEventListener('storage', handleStorageChange);
-      window.removeEventListener('auth_changed', () => handleStorageChange(null));
+      window.removeEventListener('auth_changed', handleAuthChanged);
     };
   }, [isWatchRoute]); // Add isWatchRoute as dependency
 
@@ -702,6 +707,42 @@ const PersistenceManager = () => {
       if (ops.length) sendOps(ops);
     };
 
+    const getArrayItemIdentity = (item: any) => {
+      if (!item || typeof item !== 'object') {
+        return null;
+      }
+
+      if (typeof item.shareCode === 'string' && item.shareCode) {
+        return `shareCode:${item.shareCode}`;
+      }
+
+      if (typeof item.key === 'string' && item.key) {
+        return `key:${item.key}`;
+      }
+
+      const parts: string[] = [];
+
+      if ((typeof item.type === 'string' || typeof item.type === 'number') && item.type !== '') {
+        parts.push(`type:${String(item.type)}`);
+      }
+
+      if ((typeof item.id === 'string' || typeof item.id === 'number') && item.id !== '') {
+        parts.push(`id:${String(item.id)}`);
+      }
+
+      if (item.episodeInfo && typeof item.episodeInfo === 'object') {
+        const { season, episode } = item.episodeInfo;
+        if (typeof season === 'string' || typeof season === 'number') {
+          parts.push(`season:${String(season)}`);
+        }
+        if (typeof episode === 'string' || typeof episode === 'number') {
+          parts.push(`episode:${String(episode)}`);
+        }
+      }
+
+      return parts.length ? parts.join('|') : null;
+    };
+
     const computeArrayDiffOps = (key: string, oldStr: string | null, newStr: string) => {
       let oldArr: any[] = [];
       let newArr: any[] = [];
@@ -710,24 +751,27 @@ const PersistenceManager = () => {
       // Only handle true top-level arrays; for objects or non-arrays, let object patch handle
       if (!Array.isArray(oldArr) || !Array.isArray(newArr)) return null as any;
 
-      const oldMapById = new Map<number | string, any>();
+      const oldMapById = new Map<string, any>();
       oldArr.forEach((it: any) => {
-        if (it && typeof it === 'object' && 'id' in it) oldMapById.set((it as any).id, it);
+        const identity = getArrayItemIdentity(it);
+        if (identity) {
+          oldMapById.set(identity, it);
+        }
       });
 
       const ops: any[] = [];
 
       // Additions and updates
       newArr.forEach((it: any) => {
-        const id = it && typeof it === 'object' && 'id' in it ? (it as any).id : undefined;
-        if (id !== undefined && oldMapById.has(id)) {
-          const prev = oldMapById.get(id);
+        const identity = getArrayItemIdentity(it);
+        if (identity && oldMapById.has(identity)) {
+          const prev = oldMapById.get(identity);
           if (JSON.stringify(prev) !== JSON.stringify(it)) {
             // Model as remove then add for updated item
-            ops.push({ op: 'arrayRemove', key, value: { id } });
+            ops.push({ op: 'arrayRemove', key, value: prev });
             ops.push({ op: 'arrayAdd', key, value: it });
           }
-        } else if (id !== undefined) {
+        } else if (identity) {
           ops.push({ op: 'arrayAdd', key, value: it });
         } else {
           // Primitive arrays or objects without id - fallback to full set
@@ -737,11 +781,15 @@ const PersistenceManager = () => {
       });
 
       // Removals
-      const newIds = new Set(newArr.filter((x: any) => x && typeof x === 'object' && 'id' in x).map((x: any) => x.id));
+      const newIds = new Set(
+        newArr
+          .map((item: any) => getArrayItemIdentity(item))
+          .filter((identity): identity is string => Boolean(identity))
+      );
       oldArr.forEach((it: any) => {
-        const id = it && typeof it === 'object' && 'id' in it ? it.id : undefined;
-        if (id !== undefined && !newIds.has(id)) {
-          ops.push({ op: 'arrayRemove', key, value: { id } });
+        const identity = getArrayItemIdentity(it);
+        if (identity && !newIds.has(identity)) {
+          ops.push({ op: 'arrayRemove', key, value: it });
         }
       });
 
@@ -770,15 +818,21 @@ const PersistenceManager = () => {
           // Build id maps
           const oldById = new Map<any, any>();
           oldArr.forEach((it: any) => {
-            if (it && typeof it === 'object' && 'id' in it) oldById.set(it.id, it);
+            const identity = getArrayItemIdentity(it);
+            if (identity) {
+              oldById.set(identity, it);
+            }
           });
           const newById = new Map<any, any>();
           newArr.forEach((it: any) => {
-            if (it && typeof it === 'object' && 'id' in it) newById.set(it.id, it);
+            const identity = getArrayItemIdentity(it);
+            if (identity) {
+              newById.set(identity, it);
+            }
           });
 
           // If items don't have ids, fallback to full set
-          const canId = newArr.every((it: any) => !it || (typeof it === 'object' && 'id' in it));
+          const canId = newArr.every((it: any) => !it || Boolean(getArrayItemIdentity(it)));
           if (!canId) {
             if (JSON.stringify(oldArr) !== JSON.stringify(newArr)) set[k] = newArr;
             continue;
@@ -789,15 +843,15 @@ const PersistenceManager = () => {
           const removeIds: Array<string | number> = [];
 
           newArr.forEach((it: any) => {
-            const id = it && typeof it === 'object' ? it.id : undefined;
-            if (id === undefined) return;
+            const id = getArrayItemIdentity(it);
+            if (!id) return;
             const prev = oldById.get(id);
             if (!prev) add.push(it);
             else if (JSON.stringify(prev) !== JSON.stringify(it)) update.push(it);
           });
           oldArr.forEach((it: any) => {
-            const id = it && typeof it === 'object' ? it.id : undefined;
-            if (id === undefined) return;
+            const id = getArrayItemIdentity(it);
+            if (!id) return;
             if (!newById.has(id)) removeIds.push(id);
           });
 
@@ -824,6 +878,7 @@ const PersistenceManager = () => {
     const processSet = (key: string, oldVal: string | null, newVal: string) => {
       if (suppressSyncRef.current) return;
       if (!isSyncableStorageKey(key)) return;
+      if (oldVal === newVal) return;
       // Vérifier si un clear forcé est en cours (erreur 401)
       if ((window as any).__forceClearInProgress) return;
       // Skip sync during profile data loading (but allow on watch routes)
@@ -1301,17 +1356,15 @@ const AppWithIntro: React.FC = () => {
   const isHeroHeaderPage =
     currentPath === '/' ||
     currentPath === '/movies' ||
+    currentPath === '/anime' ||
     currentPath === '/tv-shows' ||
     currentPath.startsWith('/provider/');
+  const isWrappedRoute = currentPath === '/wrapped' || currentPath.startsWith('/wrapped/');
+  const shouldShowHeader = !isWatchRoute && !isWrappedRoute;
   const isAprilFoolsAdminRouteEnabled = isAprilFoolsAdminEnabled(location.search);
-  const isNotFoundPage = location.pathname === '*' || location.pathname.match(/\/(?!(watch\/|watchparty\/room\/)).*/) === null;
-  // Pages sans footer: watch routes, 404, profile selection, profile management, wrapped
-  const isWrappedPage = currentPath === '/wrapped' || currentPath.startsWith('/wrapped/');
-  const isCineGraphPage = currentPath === '/cinegraph';
-  const isNoFooterPage = isWatchRoute || isNotFoundPage || currentPath === '/profile-selection' || currentPath === '/profile-management' || isWrappedPage || isCineGraphPage;
-
+  const isNoFooterPage = isWatchRoute;
   React.useEffect(() => {
-    // Masquer le footer sur les routes /watch, 404, et pages de profil
+    // Masquer le footer uniquement sur les routes lecteur
     const footer = document.querySelector('footer');
     if (footer) {
       if (isNoFooterPage) {
@@ -1387,10 +1440,10 @@ const AppWithIntro: React.FC = () => {
       <ScrollToTop />
       {/* Animation de scroll fluide globale (Lenis) */}
       <SmoothScroll />
-      {/* Ne pas afficher le Header sur les routes /watch, pages de profil et wrapped */}
-      {!isWatchRoute && currentPath !== '/profile-selection' && currentPath !== '/profile-management' && !isWrappedPage && <Header />}
+      {/* Ne pas afficher le Header sur les routes lecteur et Wrapped */}
+      {shouldShowHeader && <Header />}
       <PersistenceManager />
-      <div className={!isWatchRoute && !isHeroHeaderPage && currentPath !== '/profile-selection' && currentPath !== '/profile-management' && !isWrappedPage ? 'pt-20' : ''}>
+      <div className={shouldShowHeader && !isHeroHeaderPage ? 'pt-20' : ''}>
         <AlertNotificationManager />
         <DefaultProfileNudge />
         <ProfileGate>
@@ -1398,6 +1451,7 @@ const AppWithIntro: React.FC = () => {
             <Route path="/" element={<Home />} />
             <Route path="/search" element={<Search />} />
             <Route path="/movies" element={<Movies />} />
+            <Route path="/anime" element={<Anime />} />
             <Route path="/tv-shows" element={<TVShows />} />
             <Route path="/collections" element={<Collections />} />
             <Route path="/collection/:id" element={<CollectionDetails />} />
@@ -1471,8 +1525,7 @@ const AppWithIntro: React.FC = () => {
             <Route path="*" element={<NotFound />} />
           </Routes>
         </ProfileGate>
-        <Analytics />
-        <Footer />
+        {!isWatchRoute && <Footer />}
       </div>
 
       {/* Redirect Popup */}

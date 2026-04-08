@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useLayoutEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { motion } from 'framer-motion';
 import axios from 'axios';
@@ -115,12 +115,8 @@ const SuggestionPage: React.FC = () => {
   const API_KEY = import.meta.env.VITE_TMDB_API_KEY || '';
   
   // Masquer le footer et le header seulement
-  useLayoutEffect(() => {
+  useEffect(() => { return undefined;
     // Masquer le footer immédiatement
-    const footer = document.querySelector('footer');
-    if (footer) {
-      footer.style.display = 'none';
-    }
     
     // Supprimer le masquage du header pour le garder visible
     // const header = document.querySelector('header');
@@ -129,30 +125,12 @@ const SuggestionPage: React.FC = () => {
     // }
 
     // Permettre le défilement sur mobile, mais garder le style approprié
-    document.body.classList.add('no-footer-page');
     
     // Nettoyage au démontage
-    return () => {
-      if (footer) {
-        footer.style.display = '';
-      }
-      // if (header) {
-      //   header.style.display = '';
-      // }
-      document.body.classList.remove('no-footer-page');
-    };
   }, []);
   
   // Double sécurité avec useEffect pour s'assurer que le footer reste masqué
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const footer = document.querySelector('footer');
-      if (footer && footer.style.display !== 'none') {
-        footer.style.display = 'none';
-      }
-    }, 100);
-    
-    return () => clearInterval(interval);
+  useEffect(() => { return undefined;
   }, []);
 
   useEffect(() => {

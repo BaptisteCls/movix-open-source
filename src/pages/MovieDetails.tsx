@@ -1353,7 +1353,7 @@ const VideoPlayer = ({ movieId, backdropPath }: { movieId: string; backdropPath?
       // =========== PROCESS FREMBED RESULTS ===========
       const isFrembedAvailable = frembedResult.isFrembedAvailable;
       setFrembedAvailable(isFrembedAvailable);
-      setVideoSource(`https://frembed.bond/api/film.php?id=${movieId}`);
+      setVideoSource(`https://frembed.help/api/film.php?id=${movieId}`);
 
       // =========== PROCESS COFLIX RESULTS ===========
       if (coflixResult) {
@@ -1370,7 +1370,7 @@ const VideoPlayer = ({ movieId, backdropPath }: { movieId: string; backdropPath?
     } catch (error) {
       console.error('Error fetching video sources:', error);
       setFrembedAvailable(false);
-      setVideoSource(`https://frembed.bond/api/film.php?id=${movieId}`);
+      setVideoSource(`https://frembed.help/api/film.php?id=${movieId}`);
       setLoadingAdFree(false);
       setLoadingCoflix(false);
       setLoadingOmega(false);
@@ -1895,7 +1895,7 @@ const VideoPlayer = ({ movieId, backdropPath }: { movieId: string; backdropPath?
                 : undefined // No sandbox for other players
             }
             src={
-              selectedSource === 'primary' ? `https://frembed.bond/api/film.php?id=${movieId}` :
+              selectedSource === 'primary' ? `https://frembed.help/api/film.php?id=${movieId}` :
                 selectedSource === 'vostfr' ? `https://vidsrc.wtf/api/3/movie/?id=${movieId}` :
                   selectedSource === 'videasy' ? `https://vidlink.pro/movie/${movieId}?primaryColor=0278fd&secondaryColor=a2a2a2&iconColor=eefdec&icons=default&player=default&title=true&poster=true&autoplay=true&nextbutton=false` :
                     selectedSource === 'vidsrccc' ? `https://vidsrc.io/embed/movie?tmdb=${movieId}` :

@@ -8,12 +8,14 @@ const express = require('express');
 const rateLimit = require('express-rate-limit');
 const { ipKeyGenerator } = require('express-rate-limit');
 const path = require('path');
+const crypto = require('crypto');
 const fsp = require('fs').promises;
 const { v4: uuidv4 } = require('uuid');
 
 const router = express.Router();
 
 const { getAuthIfValid } = require('../middleware/auth');
+const { getPool, withMysqlAdvisoryLock } = require('../mysqlPool');
 const { safeWriteJsonFile } = require('../utils/safeFile');
 const { logSyncErrorToDiscord } = require('../utils/discord');
 const { createRedisRateLimitStore } = require('../utils/redisRateLimitStore');
@@ -144,6 +146,64 @@ function safeParseStoredValue(rawValue, fallback) {
   }
 }
 
+function getArrayItemIdentity(item) {
+  if (!item || typeof item !== 'object') {
+    return null;
+  }
+
+  if (typeof item.shareCode === 'string' && item.shareCode) {
+    return `shareCode:${item.shareCode}`;
+  }
+
+  if (typeof item.key === 'string' && item.key) {
+    return `key:${item.key}`;
+  }
+
+  const parts = [];
+
+  if ((typeof item.type === 'string' || typeof item.type === 'number') && item.type !== '') {
+    parts.push(`type:${String(item.type)}`);
+  }
+
+  if ((typeof item.id === 'string' || typeof item.id === 'number') && item.id !== '') {
+    parts.push(`id:${String(item.id)}`);
+  }
+
+  if (item.episodeInfo && typeof item.episodeInfo === 'object') {
+    const { season, episode } = item.episodeInfo;
+    if (typeof season === 'number' || typeof season === 'string') {
+      parts.push(`season:${String(season)}`);
+    }
+    if (typeof episode === 'number' || typeof episode === 'string') {
+      parts.push(`episode:${String(episode)}`);
+    }
+  }
+
+  return parts.length ? parts.join('|') : null;
+}
+
+function buildSyncLockName(userType, userId, profileId) {
+  const digest = crypto
+    .createHash('sha1')
+    .update(`${userType}:${userId}:${profileId}`)
+    .digest('hex');
+  return `mainapi:sync:${digest}`;
+}
+
+async function withProfileSyncLock(userType, userId, profileId, task) {
+  const pool = getPool();
+  if (!pool) {
+    throw new Error('MySQL pool not ready for sync lock');
+  }
+
+  return withMysqlAdvisoryLock(
+    pool,
+    buildSyncLockName(userType, userId, profileId),
+    task,
+    { timeoutSeconds: 30 }
+  );
+}
+
 function createSyncStatsResponse(profileId, profileStats, legacyStats) {
   return {
     profileId,
@@ -177,9 +237,11 @@ function applySyncOperation(serverData, op) {
       }
 
       let next = arr.slice();
+      const targetIdentity = getArrayItemIdentity(op.value);
       const exists = (item) => {
-        if (op.value && typeof op.value === 'object' && 'id' in op.value) {
-          return item && typeof item === 'object' && item.id === op.value.id;
+        const itemIdentity = getArrayItemIdentity(item);
+        if (targetIdentity && itemIdentity) {
+          return itemIdentity === targetIdentity;
         }
 
         return JSON.stringify(item) === JSON.stringify(op.value);
@@ -200,9 +262,11 @@ function applySyncOperation(serverData, op) {
         break;
       }
 
+      const targetIdentity = getArrayItemIdentity(op.value);
       const next = arr.filter((item) => {
-        if (op.value && typeof op.value === 'object' && 'id' in op.value) {
-          return !(item && typeof item === 'object' && item.id === op.value.id);
+        const itemIdentity = getArrayItemIdentity(item);
+        if (targetIdentity && itemIdentity) {
+          return itemIdentity !== targetIdentity;
         }
 
         return JSON.stringify(item) !== JSON.stringify(op.value);
@@ -237,26 +301,30 @@ function applySyncOperation(serverData, op) {
           const byId = new Map();
 
           currentArray.forEach((item) => {
-            if (item && typeof item === 'object' && item.id) {
-              byId.set(item.id, item);
+            const identity = getArrayItemIdentity(item);
+            if (identity) {
+              byId.set(identity, item);
             }
           });
 
           (patch.add || []).forEach((item) => {
-            if (item && typeof item === 'object' && item.id) {
-              byId.set(item.id, item);
+            const identity = getArrayItemIdentity(item);
+            if (identity) {
+              byId.set(identity, item);
             }
           });
 
           (patch.update || []).forEach((item) => {
-            if (item && typeof item === 'object' && item.id) {
-              byId.set(item.id, item);
+            const identity = getArrayItemIdentity(item);
+            if (identity) {
+              byId.set(identity, item);
             }
           });
 
           (patch.remove || []).forEach((item) => {
-            if (item && typeof item === 'object' && item.id) {
-              byId.delete(item.id);
+            const identity = getArrayItemIdentity(item);
+            if (identity) {
+              byId.delete(identity);
             }
           });
 
@@ -440,28 +508,32 @@ router.post('/sync', syncRateLimit, async (req, res) => {
     syncContext.profileId = profileId;
     syncContext.opsCount = ops.length;
 
-    const userData = await readUserData(userType, finalUserId);
-    getOwnedProfile(userData, profileId);
+    const syncResult = await withProfileSyncLock(userType, finalUserId, profileId, async () => {
+      const userData = await readUserData(userType, finalUserId);
+      getOwnedProfile(userData, profileId);
 
-    const serverData = await readProfileData(userType, finalUserId, profileId);
-    ops.forEach((op) => applySyncOperation(serverData, op));
+      const serverData = await readProfileData(userType, finalUserId, profileId);
+      ops.forEach((op) => applySyncOperation(serverData, op));
 
-    const { data: nextProfileData, stats: profileStats } = sanitizeProfileData(serverData);
+      const { data: nextProfileData, stats: profileStats } = sanitizeProfileData(serverData);
 
-    if (ops.length > 0) {
-      const writeSuccess = await writeProfileData(userType, finalUserId, profileId, nextProfileData);
-      if (!writeSuccess) {
-        console.error(`[SYNC] Echec de l'ecriture pour ${userType}:${finalUserId}:${profileId}`);
-        await logSyncErrorToDiscord('Echec de l\'ecriture des donnees de sync', buildSyncLogContext(syncContext));
-        return res.status(500).json({ success: false, error: 'Failed to save data' });
+      if (ops.length > 0) {
+        const writeSuccess = await writeProfileData(userType, finalUserId, profileId, nextProfileData);
+        if (!writeSuccess) {
+          console.error(`[SYNC] Echec de l'ecriture pour ${userType}:${finalUserId}:${profileId}`);
+          await logSyncErrorToDiscord('Echec de l\'ecriture des donnees de sync', buildSyncLogContext(syncContext));
+          throw new Error('Failed to save data');
+        }
       }
-    }
+
+      return profileStats;
+    });
 
     return res.status(200).json({
       success: true,
       stats: {
-        profileBytes: profileStats.bytes,
-        profileKeyCount: profileStats.keyCount,
+        profileBytes: syncResult.bytes,
+        profileKeyCount: syncResult.keyCount,
         profileQuotaBytes: SYNC_LIMITS.maxProfileBytes
       }
     });

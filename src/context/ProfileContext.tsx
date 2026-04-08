@@ -29,6 +29,28 @@ export const ProfileProvider: React.FC<ProfileProviderProps> = ({ children }) =>
   // Check if we're on a watch route - if so, disable profile data loading (but allow sync)
   const isWatchRoute = location.pathname.startsWith('/watch/');
 
+  const applyProfileEntriesToLocalStorage = (entries: Record<string, string>) => {
+    Object.keys(localStorage).forEach((key) => {
+      if (isSyncableStorageKey(key) && !shouldPreserveStorageKeyOnProfileLoad(key)) {
+        localStorage.removeItem(key);
+      }
+    });
+
+    Object.entries(entries).forEach(([key, value]) => {
+      if (typeof value === 'string' && isSyncableStorageKey(key)) {
+        localStorage.setItem(key, value);
+      }
+    });
+  };
+
+  const refreshVipState = () => {
+    if (localStorage.getItem('access_code')) {
+      checkVipStatus(true).catch(() => { /* ignore */ });
+    } else {
+      window.dispatchEvent(new CustomEvent('vipStatusChanged', { detail: { vip: false } }));
+    }
+  };
+
   // Load profiles from server
   const loadProfiles = async () => {
     try {
@@ -151,6 +173,8 @@ export const ProfileProvider: React.FC<ProfileProviderProps> = ({ children }) =>
         setProfiles([defaultProfile]);
         setCurrentProfile(defaultProfile);
         localStorage.setItem('selected_profile_id', defaultProfile.id);
+        window.dispatchEvent(new CustomEvent('sync_storage_updated'));
+        refreshVipState();
         console.log('Default profile created for new user:', defaultProfile.name);
       }
     } catch (error) {
@@ -180,12 +204,8 @@ export const ProfileProvider: React.FC<ProfileProviderProps> = ({ children }) =>
         setProfiles([defaultProfile]);
         setCurrentProfile(defaultProfile);
         localStorage.setItem('selected_profile_id', defaultProfile.id);
-        // Load the migrated data for the default profile (unless on watch route)
-        if (!isWatchRoute) {
-          await loadProfileData(defaultProfile.id);
-        } else {
-          console.log('Skipping profile data loading after migration - on watch route');
-        }
+        window.dispatchEvent(new CustomEvent('sync_storage_updated'));
+        refreshVipState();
         console.log('Data migrated to default profile:', defaultProfile.name);
       }
     } catch (error) {
@@ -233,33 +253,17 @@ export const ProfileProvider: React.FC<ProfileProviderProps> = ({ children }) =>
       });
 
       if (response.data.success && response.data.data) {
-        // Get all current localStorage keys
-        const allKeys = Object.keys(localStorage);
-        
-        // Remove keys that are not in the keep list
-        allKeys.forEach(key => {
-          if (!shouldPreserveStorageKeyOnProfileLoad(key)) {
-            localStorage.removeItem(key);
-          }
-        });
-
-        // Load profile data into localStorage
         const profileData = response.data.data;
-        Object.entries(profileData).forEach(([key, value]) => {
-          if (typeof value === 'string' && isSyncableStorageKey(key)) {
-            localStorage.setItem(key, value);
-          }
-        });
+        const profileEntries = Object.fromEntries(
+          Object.entries(profileData).filter(
+            ([key, value]) => typeof value === 'string' && isSyncableStorageKey(key)
+          )
+        ) as Record<string, string>;
 
-        window.dispatchEvent(new Event('storage'));
+        applyProfileEntriesToLocalStorage(profileEntries);
         window.dispatchEvent(new CustomEvent('sync_storage_updated'));
+        refreshVipState();
 
-        if (localStorage.getItem('access_code')) {
-          checkVipStatus(true).catch(() => { /* ignore */ });
-        } else {
-          window.dispatchEvent(new CustomEvent('vipStatusChanged', { detail: { vip: false } }));
-        }
-        
         console.log('Profile data loaded for profile:', profileId);
       }
     } catch (error) {
@@ -352,6 +356,9 @@ export const ProfileProvider: React.FC<ProfileProviderProps> = ({ children }) =>
           setProfiles([newDefaultProfile]);
           setCurrentProfile(newDefaultProfile);
           localStorage.setItem('selected_profile_id', newDefaultProfile.id);
+          if (!isWatchRoute) {
+            await loadProfileData(newDefaultProfile.id);
+          }
           console.log('New default profile created by server:', newDefaultProfile.name);
         } else {
           // Reload profiles from server to get updated default status

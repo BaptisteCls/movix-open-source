@@ -647,6 +647,29 @@ router.get('/catalog', async (req, res) => {
       [limit]
     );
 
+    const likeStatsByShareCode = new Map();
+    if (rows.length > 0) {
+      const shareCodes = rows.map((row) => row.share_code);
+      const placeholders = shareCodes.map(() => '?').join(', ');
+      const likeRows = await dbAll(
+        `SELECT content_id,
+                SUM(CASE WHEN vote_type = 'like' THEN 1 ELSE 0 END) AS likes_count,
+                SUM(CASE WHEN vote_type = 'dislike' THEN 1 ELSE 0 END) AS dislikes_count
+           FROM likes
+          WHERE content_type = 'shared-list'
+            AND content_id IN (${placeholders})
+          GROUP BY content_id`,
+        shareCodes
+      );
+
+      likeRows.forEach((row) => {
+        likeStatsByShareCode.set(String(row.content_id), {
+          likesCount: Number(row.likes_count) || 0,
+          dislikesCount: Number(row.dislikes_count) || 0,
+        });
+      });
+    }
+
     const lists = (await Promise.all(
       rows.map(async (row) => {
         const data = await buildAndCacheSharedList(
@@ -660,10 +683,17 @@ router.get('/catalog', async (req, res) => {
 
         if (!data) return null;
 
+        const likeStats = likeStatsByShareCode.get(String(row.share_code)) || {
+          likesCount: 0,
+          dislikesCount: 0
+        };
+
         return {
           ...data,
           sharedAt: row.created_at,
-          updatedAt: row.updated_at
+          updatedAt: row.updated_at,
+          likesCount: likeStats.likesCount,
+          dislikesCount: likeStats.dislikesCount
         };
       })
     )).filter(Boolean);

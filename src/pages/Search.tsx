@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Link, useNavigate, useLocation, useSearchParams } from 'react-router-dom';
-import { Search as SearchIcon, Loader, Filter, Star, Calendar, User, Film, Award, X, Info, LayoutGrid, List, ExternalLink, Globe } from 'lucide-react';
+import { useNavigate, useLocation } from 'react-router-dom';
+import { Search as SearchIcon, Loader, Filter, Star, Calendar, User, Film, Award, X, LayoutGrid, List, ExternalLink, Globe } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useSearch } from '../context/SearchContext';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -18,6 +18,8 @@ import CustomSlider from '../components/CustomSlider';
 import { SearchGridCard, SearchListCard } from '../components/SearchCard';
 
 type ViewType = 'grid' | 'list';
+
+const POSTER_FALLBACK = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="90" height="135" viewBox="0 0 90 135"><rect width="90" height="135" fill="%231a1a1a"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="%23ffffff66" font-family="Arial, sans-serif" font-size="10">No Image</text></svg>';
 
 // Reusable pagination component
 const PaginationBar = ({ currentPage, maxPages, onSelect }: { currentPage: number; maxPages: number; onSelect: (n: number) => void }) => {
@@ -65,7 +67,6 @@ const Search: React.FC = () => {
     const searchPerformedRef = useRef<boolean>(false);
     const navigate = useNavigate();
     const location = useLocation();
-    const [searchParams, setSearchParams] = useSearchParams();
 
     const {
         query,
@@ -79,12 +80,10 @@ const Search: React.FC = () => {
         toggleGenre,
         results,
         loading,
-        hasMore,
         performSearch,
         showFilters,
         setShowFilters,
         loadingGenres,
-        isLoadingMore,
         page,
         totalPages,
         director,
@@ -97,8 +96,6 @@ const Search: React.FC = () => {
         actorSuggestions,
         loadingSuggestions,
         fetchPeopleSuggestions,
-        selectPerson,
-        clearSuggestions,
         autocompleteSuggestions,
         loadingAutocomplete,
         fetchAutocompleteSuggestions,
@@ -839,7 +836,7 @@ const Search: React.FC = () => {
                                                                 : 'bg-white/5 border border-white/10 text-white/60 hover:text-white hover:border-white/30'
                                                                 }`}
                                                         >
-                                                            {genre.name}
+                                                            {t(`genres.id_${genre.id}`, { defaultValue: genre.name })}
                                                         </motion.button>
                                                     ))}
                                                 </div>

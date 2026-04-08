@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import Snowfall from 'react-snowfall';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Film, Search, Menu, X, Star, Tv2, Users, Clapperboard, Bell, Tv, Lightbulb, Network, List, Radio, Unlock, ChevronDown, ExternalLink, LayoutGrid, Settings, Dices } from 'lucide-react';
+import { Film, Search, Menu, X, Star, Tv2, Users, Clapperboard, Bell, Tv, Lightbulb, Network, List, Radio, Unlock, ChevronDown, ExternalLink, LayoutGrid, Settings, Dices, Sparkles } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import ProfileMenu from './ProfileMenu';
 import NotificationsPopup from './NotificationsPopup';
@@ -88,9 +88,9 @@ const Header: React.FC = () => {
 
   // 3 items principaux visibles dans le header
   const mainNavItems = [
-    { name: t('nav.movies'), path: '/movies', icon: <Clapperboard size={16} /> },
-    { name: t('nav.tvShows'), path: '/tv-shows', icon: <Tv2 size={16} /> },
-    { name: t('nav.top10'), path: '/top10', icon: <Star size={16} /> },
+    { name: t('nav.movies'), path: '/movies', icon: <Clapperboard size={16} />, isActive: location.pathname === '/movies' },
+    { name: t('nav.tvShows'), path: '/tv-shows', icon: <Tv2 size={16} />, isActive: location.pathname === '/tv-shows' },
+    { name: t('nav.anime'), path: '/anime', icon: <Sparkles size={16} />, isActive: location.pathname === '/anime' },
   ];
 
   // Groupes du mega menu
@@ -99,8 +99,8 @@ const Header: React.FC = () => {
       title: t('nav.movies'),
       items: [
         { name: t('nav.collections'), path: '/collections', icon: <Film size={20} />, color: 'purple', desc: t('nav.collectionsDesc') },
+        { name: t('nav.top10'), path: '/top10', icon: <Star size={20} />, color: 'yellow', desc: t('nav.top10Desc') },
         { name: t('nav.roulette'), path: '/roulette', icon: <Dices size={20} />, color: 'red', desc: t('roulette.navDesc') },
-        { name: t('nav.greenlight'), path: '/wishboard', icon: <Lightbulb size={20} />, color: 'green', desc: t('nav.greenlightDesc') },
         { name: t('nav.cinegraph'), path: '/cinegraph', icon: <Network size={20} />, color: 'blue', desc: t('nav.cinegraphDesc') },
       ]
     },
@@ -110,6 +110,7 @@ const Header: React.FC = () => {
         { name: t('nav.watchParty'), path: '/watchparty/list', icon: <Users size={20} />, color: 'orange', desc: t('nav.watchPartyDesc') },
         { name: t('nav.sharedLists'), path: '/list-catalog', icon: <List size={20} />, color: 'indigo', desc: t('nav.sharedListsDesc') },
         { name: t('nav.suggestions'), path: '/suggestion', icon: <Star size={20} />, color: 'pink', desc: t('nav.suggestionsDesc') },
+        { name: t('nav.greenlight'), path: '/wishboard', icon: <Lightbulb size={20} />, color: 'green', desc: t('nav.greenlightDesc') },
       ]
     },
     {
@@ -356,7 +357,7 @@ const Header: React.FC = () => {
                     key={item.path}
                     to={item.path}
                     className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-all duration-200 ${
-                      location.pathname === item.path
+                      item.isActive
                         ? 'text-white bg-white/10 font-medium'
                         : 'text-gray-400 hover:text-white hover:bg-white/5'
                     }`}
@@ -592,7 +593,7 @@ const Header: React.FC = () => {
                         to={item.path}
                         onClick={() => setIsExploreOpen(false)}
                         className={`flex-1 flex items-center justify-center gap-2 py-3.5 rounded-xl text-sm font-medium transition-all border ${
-                          location.pathname === item.path
+                          item.isActive
                             ? 'bg-red-600/20 border-red-500/30 text-white'
                             : 'bg-white/[0.06] border-white/[0.08] text-gray-300 active:bg-white/10'
                         }`}

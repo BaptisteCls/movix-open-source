@@ -38,11 +38,11 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import { useAuth } from '../context/AuthContext';
 import { useProfile } from '../context/ProfileContext';
-import { getResolvedAccountContext } from '../utils/accountAuth';
+import { broadcastAuthChange, clearStoredAuthSession, getResolvedAccountContext } from '../utils/accountAuth';
 import { isUserVip } from '../utils/authUtils';
 import NewListModal from '../components/NewListModal';
 import AvatarSelector from '../components/AvatarSelector';
-import FilterSystem, { type FilterOptions } from '../components/FilterSystem';
+import FilterSystem, { type FilterItemType, type FilterOptions } from '../components/FilterSystem';
 import CustomDropdown from '../components/CustomDropdown';
 import { useOptimizedFilter } from '../hooks/useOptimizedFilter';
 
@@ -50,21 +50,34 @@ import { AlertService } from '../services/alertService';
 import { EpisodeAlert, NotifyBeforeDays } from '../types/alerts';
 import { encodeId } from '../utils/idEncoder';
 import { getTmdbLanguage } from '../i18n';
+import {
+  SHARED_LIST_FAVORITES_STORAGE_KEY,
+  readSharedListFavorites,
+  type SharedListFavorite,
+} from '../utils/sharedListFavorites';
 
 // Get API URL from environment variable
 const API_URL = import.meta.env.VITE_MAIN_API;
 const TMDB_API_KEY = import.meta.env.VITE_TMDB_API_KEY || '';
 const TURNSTILE_SITE_KEY = import.meta.env.VITE_TURNSTILE_SITE_KEY;
+const TMDB_POSTER_BASE_URL = 'https://image.tmdb.org/t/p/w500';
+const LIVE_TV_FAVORITES_STORAGE_KEY = 'live_tv_favorite_channels';
+const LIVE_TV_IPTV_CATEGORY_FAVORITES_STORAGE_KEY = 'live_tv_favorite_iptv_categories';
 
 // Track shows for which we've already fetched metadata
 const metadataCache = new Map();
 
+type ProfileMediaItemType = 'movie' | 'tv' | 'collection';
+type ProfileExtraFavoriteType = 'shared-list' | 'live-tv';
+type ProfileItemType = ProfileMediaItemType | ProfileExtraFavoriteType;
+
 interface WatchItem {
-  id: number;
-  type: 'movie' | 'tv' | 'collection';
+  id: number | string;
+  type: ProfileItemType;
   title: string;
   name?: string; // Pour les collections qui utilisent 'name' au lieu de 'title'
   poster_path: string;
+  searchText?: string;
   episodeInfo?: {
     season: number;
     episode: number;
@@ -73,6 +86,15 @@ interface WatchItem {
   // Propriétés spécifiques aux collections
   backdrop_path?: string | null;
   overview?: string;
+  shareCode?: string;
+  username?: string;
+  itemCount?: number;
+  isVip?: boolean;
+  source?: string;
+  liveTvKind?: 'channel' | 'iptv';
+  liveTvTargetId?: string;
+  liveTvCatalogId?: string;
+  liveTvCategoryId?: string;
 }
 
 interface UserProfile {
@@ -119,6 +141,72 @@ interface DragHandleProps {
   listeners: Record<string, Function> | undefined;
   attributes: Record<string, any>;
 }
+
+interface LiveTVFavorite {
+  key: string;
+  source: string;
+  id: string;
+  name: string;
+  poster?: string | null;
+  addedAt: string;
+  kind: 'channel' | 'iptv';
+  catalogId?: string;
+  categoryId?: string;
+}
+
+const PROFILE_IMPORT_PRESERVED_ARRAY_KEYS = new Set([
+  SHARED_LIST_FAVORITES_STORAGE_KEY,
+  LIVE_TV_FAVORITES_STORAGE_KEY,
+  LIVE_TV_IPTV_CATEGORY_FAVORITES_STORAGE_KEY,
+]);
+
+const readStoredArray = <T,>(key: string): T[] => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(key) || '[]');
+    return Array.isArray(parsed) ? (parsed as T[]) : [];
+  } catch {
+    return [];
+  }
+};
+
+const isLiveTVFavorite = (value: unknown): value is LiveTVFavorite => {
+  if (!value || typeof value !== 'object') return false;
+
+  const candidate = value as Partial<LiveTVFavorite>;
+  return (
+    typeof candidate.key === 'string' &&
+    typeof candidate.source === 'string' &&
+    typeof candidate.id === 'string' &&
+    typeof candidate.name === 'string' &&
+    typeof candidate.addedAt === 'string' &&
+    (candidate.kind === 'channel' || candidate.kind === 'iptv')
+  );
+};
+
+const readLiveTvFavorites = (): LiveTVFavorite[] => {
+  return readStoredArray<unknown>(LIVE_TV_FAVORITES_STORAGE_KEY).filter(isLiveTVFavorite);
+};
+
+const isTmdbWatchItem = (item: WatchItem): item is WatchItem & { id: number; type: ProfileMediaItemType } => {
+  return (
+    typeof item.id === 'number' &&
+    (item.type === 'movie' || item.type === 'tv' || item.type === 'collection')
+  );
+};
+
+const isTvWatchItem = (item: WatchItem): item is WatchItem & { id: number; type: 'tv' } => {
+  return typeof item.id === 'number' && item.type === 'tv';
+};
+
+const getWatchItemKey = (item: Pick<WatchItem, 'id' | 'type'>) => `${item.type}-${String(item.id)}`;
+
+const resolveWatchItemPosterSrc = (item: Pick<WatchItem, 'poster_path'>) => {
+  if (!item.poster_path) return '';
+  if (/^https?:\/\//i.test(item.poster_path)) {
+    return item.poster_path;
+  }
+  return `${TMDB_POSTER_BASE_URL}${item.poster_path}`;
+};
 
 function SortableListCard({ id, children }: { id: string; children: React.ReactNode | ((handleProps: DragHandleProps) => React.ReactNode) }) {
   const {
@@ -354,6 +442,18 @@ const Profile: React.FC = () => {
     watchedFilter.isSorting,
     inProgressFilter.isSorting
   ]);
+
+  const availableTypeFiltersForActiveTab = useMemo<FilterItemType[]>(() => {
+    const sourceItems =
+      activeTab === 'watchlist' ? watchlist :
+      activeTab === 'favorites' ? favorites :
+      activeTab === 'watched' ? watched :
+      activeTab === 'in-progress' ? inProgress :
+      [];
+
+    const orderedTypes: FilterItemType[] = ['all', 'movie', 'tv', 'collection', 'shared-list', 'live-tv'];
+    return orderedTypes.filter((type) => type === 'all' || sourceItems.some((item) => item.type === type));
+  }, [activeTab, watchlist, favorites, watched, inProgress]);
 
   // Lock body scroll when account ID popup is open
   useEffect(() => {
@@ -600,8 +700,9 @@ const Profile: React.FC = () => {
   const enrichItemsWithMetadata = async (items: WatchItem[]) => {
     setLoadingMetadata(true);
 
-    const itemsToFetch = items.filter(item =>
-      item.type === 'tv' && (!item.title || !item.poster_path)
+    const itemsToFetch = items.filter(
+      (item): item is WatchItem & { id: number; type: 'tv' } =>
+        isTvWatchItem(item) && (!item.title || !item.poster_path)
     );
 
     if (itemsToFetch.length === 0) {
@@ -640,7 +741,7 @@ const Profile: React.FC = () => {
     return enrichedItems;
   };
 
-  const loadWatchItems = async (type: string) => {
+  const loadWatchItems = async (type: 'watchlist' | 'favorites' | 'watched') => {
     // Handle the inconsistency in storage keys for favorites
     let movieKey, tvKey, collectionsKey;
     if (type === 'favorites') {
@@ -653,17 +754,48 @@ const Profile: React.FC = () => {
       collectionsKey = `${type}_collections`;
     }
 
-    const movieItems = JSON.parse(localStorage.getItem(movieKey) || '[]') as WatchItem[];
-    const tvItems = JSON.parse(localStorage.getItem(tvKey) || '[]') as WatchItem[];
-    const collectionItems = JSON.parse(localStorage.getItem(collectionsKey) || '[]') as WatchItem[];
+    const movieItems = readStoredArray<WatchItem>(movieKey);
+    const tvItems = readStoredArray<WatchItem>(tvKey);
+    const collectionItems = readStoredArray<WatchItem>(collectionsKey);
 
     let allItems: WatchItem[] = [...movieItems, ...tvItems, ...collectionItems];
     const tvShowIdsInMainList = new Set(tvItems.map(item => item.id));
 
+    if (type === 'favorites') {
+      const sharedListItems: WatchItem[] = readSharedListFavorites().map((favorite: SharedListFavorite) => ({
+        id: favorite.shareCode,
+        type: 'shared-list',
+        title: favorite.listName,
+        poster_path: favorite.avatar || '',
+        addedAt: favorite.addedAt,
+        shareCode: favorite.shareCode,
+        username: favorite.username,
+        itemCount: favorite.itemCount,
+        isVip: favorite.isVip,
+        searchText: `${favorite.listName} ${favorite.username} ${favorite.shareCode}`,
+      }));
+
+      const liveTvItems: WatchItem[] = readLiveTvFavorites().map((favorite) => ({
+        id: favorite.key,
+        type: 'live-tv',
+        title: favorite.name,
+        poster_path: favorite.poster || '',
+        addedAt: favorite.addedAt,
+        source: favorite.source,
+        liveTvKind: favorite.kind,
+        liveTvTargetId: favorite.id,
+        liveTvCatalogId: favorite.catalogId,
+        liveTvCategoryId: favorite.categoryId,
+        searchText: `${favorite.name} ${favorite.source} ${favorite.kind}`,
+      }));
+
+      allItems = [...allItems, ...sharedListItems, ...liveTvItems];
+    }
+
     if (type === 'watched' || type === 'watchlist') {
       // Handle legacy `*_tv_episodes` format
       const legacyEpisodesKey = `${type}_tv_episodes`;
-      const legacyEpisodes = JSON.parse(localStorage.getItem(legacyEpisodesKey) || '[]') as WatchItem[];
+      const legacyEpisodes = readStoredArray<WatchItem>(legacyEpisodesKey);
 
       const showsFromLegacy = new Map<number, WatchItem>();
       legacyEpisodes.forEach(ep => {
@@ -702,12 +834,14 @@ const Profile: React.FC = () => {
       allItems = [...allItems, ...Array.from(showsFromLegacy.values())];
     }
 
-    const uniqueItems = Array.from(new Map(allItems.map(item => [`${item.type}-${item.id}`, item])).values());
+    const uniqueItems = Array.from(new Map(allItems.map(item => [getWatchItemKey(item), item])).values());
     uniqueItems.sort((a, b) => new Date(b.addedAt).getTime() - new Date(a.addedAt).getTime());
 
     if (type === 'watched' || type === 'watchlist' || type === 'favorites') {
-      const enrichedItems = await enrichItemsWithMetadata(uniqueItems);
-      return enrichedItems;
+      const tmdbItems = uniqueItems.filter(isTmdbWatchItem);
+      const enrichedTmdbItems = await enrichItemsWithMetadata(tmdbItems);
+      const enrichedTmdbMap = new Map(enrichedTmdbItems.map((item) => [getWatchItemKey(item), item]));
+      return uniqueItems.map((item) => enrichedTmdbMap.get(getWatchItemKey(item)) ?? item);
     }
 
     return uniqueItems;
@@ -1425,7 +1559,10 @@ const Profile: React.FC = () => {
       setCurrentSessionId(storedSessionId);
     } catch (err: any) {
       if (err?.response?.status === 401) {
-        try { localStorage.clear(); } catch { }
+        try {
+          clearStoredAuthSession();
+          broadcastAuthChange();
+        } catch { }
         try { sessionStorage.clear(); } catch { }
         window.location.href = '/';
         return;
@@ -1919,6 +2056,35 @@ const Profile: React.FC = () => {
     loadAllItems();
   }, [checkProgressAndMarkWatched, isEditingUsername]);
 
+  useEffect(() => {
+    const favoriteKeys = new Set([
+      'favorite_movie',
+      'favorites_tv',
+      'favorite_collections',
+      SHARED_LIST_FAVORITES_STORAGE_KEY,
+      LIVE_TV_FAVORITES_STORAGE_KEY,
+    ]);
+
+    const refreshFavorites = async () => {
+      setFavorites(await loadWatchItems('favorites'));
+    };
+
+    const handleStorageLikeUpdate = (event?: StorageEvent) => {
+      if (event?.key && !favoriteKeys.has(event.key)) {
+        return;
+      }
+      void refreshFavorites();
+    };
+
+    window.addEventListener('storage', handleStorageLikeUpdate);
+    window.addEventListener('sync_storage_updated', handleStorageLikeUpdate as EventListener);
+
+    return () => {
+      window.removeEventListener('storage', handleStorageLikeUpdate);
+      window.removeEventListener('sync_storage_updated', handleStorageLikeUpdate as EventListener);
+    };
+  }, []);
+
   // Listen for VIP status changes
   useEffect(() => {
     const handleVipStatusChange = () => {
@@ -2314,6 +2480,12 @@ const Profile: React.FC = () => {
               const parsedValue = JSON.parse(value);
 
               if (Array.isArray(parsedValue)) {
+                if (PROFILE_IMPORT_PRESERVED_ARRAY_KEYS.has(key)) {
+                  localStorage.setItem(key, JSON.stringify(parsedValue));
+                  importedCount++;
+                  return;
+                }
+
                 // Convert the array to our format
                 const convertedArray = parsedValue.map((item: any) => {
                   if (item.episodeInfo) {
@@ -2567,19 +2739,96 @@ const Profile: React.FC = () => {
     watchedFilter.filteredItems
   ]);
 
+  const getWatchItemPath = useCallback((item: WatchItem) => {
+    if (item.type === 'shared-list') {
+      return `/list/${encodeURIComponent(item.shareCode || String(item.id))}`;
+    }
+
+    if (item.type === 'live-tv') {
+      const source = item.source?.trim();
+      const targetId = item.liveTvTargetId?.trim();
+
+      if (!source || !targetId || !item.liveTvKind) {
+        return '/live-tv';
+      }
+
+      const params = new URLSearchParams({
+        source,
+        targetId,
+        kind: item.liveTvKind,
+      });
+
+      if (item.liveTvCatalogId) {
+        params.set('catalogId', item.liveTvCatalogId);
+      }
+
+      if (item.liveTvCategoryId) {
+        params.set('categoryId', item.liveTvCategoryId);
+      }
+
+      return `/live-tv?${params.toString()}`;
+    }
+
+    if (item.type === 'collection' && typeof item.id === 'number') {
+      return `/collection/${item.id}`;
+    }
+
+    if (item.type === 'movie' && typeof item.id === 'number') {
+      return `/movie/${encodeId(item.id)}`;
+    }
+
+    if (item.type === 'tv' && typeof item.id === 'number') {
+      return `/tv/${encodeId(item.id)}`;
+    }
+
+    return '/';
+  }, []);
+
+  const getWatchItemTypeLabel = useCallback((item: WatchItem) => {
+    if (item.type === 'movie') return t('profilePage.media.movie');
+    if (item.type === 'tv') return t('profilePage.media.series');
+    if (item.type === 'collection') return t('profilePage.media.collection');
+    if (item.type === 'shared-list') return t('profilePage.media.sharedList');
+    return t('profilePage.media.liveTV');
+  }, [t]);
+
+  const getWatchItemBadgeClassName = useCallback((item: WatchItem) => {
+    if (item.type === 'movie') return 'bg-blue-600 text-white';
+    if (item.type === 'tv') return 'bg-green-600 text-white';
+    if (item.type === 'collection') return 'bg-purple-600 text-white';
+    if (item.type === 'shared-list') return 'bg-amber-500 text-black';
+    return 'bg-cyan-500 text-black';
+  }, []);
+
+  const getWatchItemSubtitle = useCallback((item: WatchItem) => {
+    if (item.type === 'shared-list') {
+      const details: string[] = [];
+      if (item.username) {
+        details.push(`@${item.username}`);
+      }
+      if (typeof item.itemCount === 'number') {
+        details.push(t('lists.itemCount', { count: item.itemCount }));
+      }
+      return details.join(' • ');
+    }
+
+    if (item.type === 'live-tv') {
+      return item.source === 'iptv' ? t('liveTV.iptvWebSource') : t('nav.liveTV');
+    }
+
+    return '';
+  }, [t]);
+
   const groupedMainItems = useMemo(() => {
     return filteredMainItems.reduce((acc: { [key: string]: WatchItem[] }, item) => {
-      if (item.type === 'tv') {
+      if (isTvWatchItem(item)) {
         const key = `tv-${item.id}`;
         if (!acc[key]) {
           acc[key] = [];
         }
         acc[key].push(item);
-      } else if (item.type === 'collection') {
-        const key = `collection-${item.id}`;
-        acc[key] = [item];
       } else {
-        const key = `movie-${item.id}`;
+        const key = getWatchItemKey(item);
         acc[key] = [item];
       }
       return acc;
@@ -2587,7 +2836,7 @@ const Profile: React.FC = () => {
   }, [filteredMainItems]);
 
   const removeFromMainList = useCallback((
-    itemId: number,
+    itemId: number | string,
     itemType: WatchItem['type'],
     listType: 'watchlist' | 'favorites' | 'watched'
   ) => {
@@ -2597,6 +2846,10 @@ const Profile: React.FC = () => {
         key = 'favorite_movie';
       } else if (itemType === 'tv') {
         key = 'favorites_tv';
+      } else if (itemType === 'shared-list') {
+        key = SHARED_LIST_FAVORITES_STORAGE_KEY;
+      } else if (itemType === 'live-tv') {
+        key = LIVE_TV_FAVORITES_STORAGE_KEY;
       } else {
         key = 'favorite_collections';
       }
@@ -2607,7 +2860,15 @@ const Profile: React.FC = () => {
     }
 
     const listItems = JSON.parse(localStorage.getItem(key) || '[]');
-    const updatedItems = listItems.filter((item: WatchItem) => item.id !== itemId);
+    const updatedItems = listItems.filter((item: any) => {
+      if (itemType === 'shared-list') {
+        return item.shareCode !== itemId;
+      }
+      if (itemType === 'live-tv') {
+        return item.key !== itemId;
+      }
+      return item.id !== itemId;
+    });
     localStorage.setItem(key, JSON.stringify(updatedItems));
 
     if (itemType === 'tv' && (listType === 'watched' || listType === 'watchlist')) {
@@ -2674,23 +2935,25 @@ const Profile: React.FC = () => {
       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 p-4 relative z-0">
         {Object.entries(groupedItems).map(([key, items]) => {
           const item = items[0]; // Assuming items[0] is the representative item for the group
+          const cardPath = getWatchItemPath(item);
+          const badgeClassName = getWatchItemBadgeClassName(item);
+          const typeLabel = getWatchItemTypeLabel(item);
+          const subtitle = getWatchItemSubtitle(item);
+          const posterSrc = resolveWatchItemPosterSrc(item);
+          const isExpandedTvCard = isTvWatchItem(item) && expandedTvShowId === item.id && detailedTvShowEpisodes;
 
           const handleCardClick = () => {
-            if (item.type === 'tv') {
+            if (isTvWatchItem(item)) {
               if (expandedTvShowId === item.id) {
                 // Si la série est déjà étendue, naviguer vers sa page détails
-                navigate(`/tv/${encodeId(item.id)}`);
+                navigate(cardPath);
               } else {
                 setExpandedTvShowId(item.id);
                 setExpandedSeasons(new Set()); // Reset expanded seasons for new show
                 fetchTvShowEpisodeDetails(item.id);
               }
-            } else if (item.type === 'collection') {
-              // Pour les collections, naviguer directement vers la page collection
-              navigate(`/collection/${item.id}`);
             } else {
-              // Pour les films, navigate directement
-              navigate(`/movie/${encodeId(item.id)}`);
+              navigate(cardPath);
             }
           };
 
@@ -2737,12 +3000,8 @@ const Profile: React.FC = () => {
               >
                 {/* Badge de type (film/série/collection) et bouton de suppression mobile toujours visible */}
                 <div className="absolute top-0 left-0 right-0 flex justify-between items-start p-2 z-10">
-                  <span className={`text-xs py-1 px-2 rounded font-medium ${item.type === 'movie' ? 'bg-blue-600 text-white' :
-                    item.type === 'tv' ? 'bg-green-600 text-white' :
-                      'bg-purple-600 text-white'
-                    }`}>
-                    {item.type === 'movie' ? t('profilePage.media.movie') :
-                      item.type === 'tv' ? t('profilePage.media.series') : t('profilePage.media.collection')}
+                  <span className={`text-xs py-1 px-2 rounded font-medium ${badgeClassName}`}>
+                    {typeLabel}
                   </span>
                   <motion.button
                     whileHover={{ scale: 1.1 }}
@@ -2760,27 +3019,48 @@ const Profile: React.FC = () => {
 
                 {/* Image and Overlay - Removed Link wrapping this part */}
                 <div className="aspect-[2/3] relative overflow-hidden">
-                  <img
-                    src={`https://image.tmdb.org/t/p/w500${item.poster_path}`}
-                    alt={item.title}
-                    loading="lazy"
-                    decoding="async"
-                    className="w-full h-full object-cover transform transition-transform duration-300 group-hover:scale-110"
-                  />
+                  {posterSrc ? (
+                    <img
+                      src={posterSrc}
+                      alt={item.title}
+                      loading="lazy"
+                      decoding="async"
+                      className="w-full h-full object-cover transform transition-transform duration-300 group-hover:scale-110"
+                      onError={(event) => {
+                        event.currentTarget.style.display = 'none';
+                        event.currentTarget.parentElement?.querySelector<HTMLElement>('[data-profile-card-fallback]')?.classList.remove('hidden');
+                      }}
+                    />
+                  ) : null}
+                  <div
+                    data-profile-card-fallback
+                    className={`absolute inset-0 ${posterSrc ? 'hidden' : ''} bg-gradient-to-br from-gray-800 via-gray-900 to-black flex flex-col items-center justify-center p-4 text-center`}
+                  >
+                    {item.type === 'shared-list' ? (
+                      <Share2 className="w-10 h-10 text-amber-300 mb-3" />
+                    ) : item.type === 'live-tv' ? (
+                      <Monitor className="w-10 h-10 text-cyan-300 mb-3" />
+                    ) : item.type === 'collection' ? (
+                      <List className="w-10 h-10 text-purple-300 mb-3" />
+                    ) : item.type === 'tv' ? (
+                      <Monitor className="w-10 h-10 text-green-300 mb-3" />
+                    ) : (
+                      <Film className="w-10 h-10 text-blue-300 mb-3" />
+                    )}
+                    <span className="text-white/85 text-xs font-medium line-clamp-3">
+                      {item.type === 'collection' ? item.name || item.title : item.title}
+                    </span>
+                  </div>
                   <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300">
                     <div className="absolute top-2 left-2">
-                      <span className={`text-xs py-1 px-2 rounded font-medium ${item.type === 'movie' ? 'bg-blue-600 text-white' :
-                        item.type === 'tv' ? 'bg-green-600 text-white' :
-                          'bg-purple-600 text-white'
-                        }`}>
-                        {item.type === 'movie' ? t('profilePage.media.movie') :
-                          item.type === 'tv' ? t('profilePage.media.series') : t('profilePage.media.collection')}
+                      <span className={`text-xs py-1 px-2 rounded font-medium ${badgeClassName}`}>
+                        {typeLabel}
                       </span>
                     </div>
                     <div className="absolute bottom-0 left-0 right-0 p-4 transform translate-y-2 group-hover:translate-y-0 transition-transform duration-300">
                       {/* Title now acts as a link */}
                       <Link
-                        to={item.type === 'collection' ? `/collection/${item.id}` : `/${item.type}/${item.id}`}
+                        to={cardPath}
                         onClick={(e) => e.stopPropagation()}
                         className="hover:underline"
                       >
@@ -2788,14 +3068,18 @@ const Profile: React.FC = () => {
                           {item.type === 'collection' ? item.name || item.title : item.title}
                         </h3>
                       </Link>
-
+                      {subtitle && (
+                        <p className="text-[11px] text-white/70 line-clamp-2">
+                          {subtitle}
+                        </p>
+                      )}
                     </div>
                   </div>
                 </div>
               </div>
 
               {/* Episode Subsection - Only for TV shows */}
-              {item.type === 'tv' && expandedTvShowId === item.id && detailedTvShowEpisodes && (
+              {isExpandedTvCard && (
                 <motion.div
                   initial={{ opacity: 0, height: 0 }}
                   animate={{ opacity: 1, height: 'auto' }}
@@ -4347,6 +4631,7 @@ const Profile: React.FC = () => {
                     totalItems={totalItemsForActiveTab}
                     filteredItems={filteredItemsForActiveTab}
                     isSorting={isSortingForActiveTab}
+                    availableTypeFilters={availableTypeFiltersForActiveTab}
                   />
                 )}
 

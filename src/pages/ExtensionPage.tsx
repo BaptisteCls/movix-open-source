@@ -1,4 +1,4 @@
-import React, { useLayoutEffect, useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Link } from 'react-router-dom';
 import { ArrowLeft, Puzzle, Shield, Zap, Globe, Download, CheckCircle, AlertTriangle, MonitorSmartphone, Server, Lock, Eye, ChevronDown, Github } from 'lucide-react';
@@ -88,30 +88,9 @@ const ExtensionPage: React.FC = () => {
   const { t } = useTranslation();
 
   // Masquer le footer
-  useLayoutEffect(() => {
-    const footer = document.querySelector('footer');
-    if (footer) {
-      footer.style.display = 'none';
-    }
-    document.body.classList.add('no-footer-page');
+  useEffect(() => undefined, []);
 
-    return () => {
-      if (footer) {
-        footer.style.display = '';
-      }
-      document.body.classList.remove('no-footer-page');
-    };
-  }, []);
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const footer = document.querySelector('footer');
-      if (footer && footer.style.display !== 'none') {
-        footer.style.display = 'none';
-      }
-    }, 100);
-    return () => clearInterval(interval);
-  }, []);
+  useEffect(() => undefined, []);
 
   // Détecter si l'extension est déjà installée
   useEffect(() => {

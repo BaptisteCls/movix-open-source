@@ -41,9 +41,7 @@ const AdFreePlayerAds: React.FC<AdFreePlayerAdsProps> = ({ onClose, onAccept, ad
   }, [shouldShow]);
 
   // Construire le lien à l'exécution pour éviter le filtrage réseau (Brave Shields / EasyList)
-  const _d = [114,101,121,101,115,104,101,104,97,100,116,119,111,98,114,105].map(c => String.fromCharCode(c)).join('');
-  const _q = [116,105,87,99,49,61,49,49,57,55,51,57,48].map(c => String.fromCharCode(c)).join('');
-  const targetLink = `https://${_d}.com/?${_q}`;
+  const targetLink = 'https://yawncollaremotion.com/av38fgu9i6?key=77d634ec911d95219d57b78717969034';
 
   const handleLinkClick = () => {
     const a = document.createElement('a');

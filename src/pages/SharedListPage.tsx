@@ -1,4 +1,4 @@
-import React, { useLayoutEffect, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Link, useParams } from 'react-router-dom';
@@ -14,6 +14,13 @@ import { Button } from '../components/ui/button';
 import { encodeId } from '../utils/idEncoder';
 import { getTmdbLanguage } from '../i18n';
 import LikeDislikeButton from '../components/LikeDislikeButton';
+import { FavoriteStarIconButton, FavoriteStarPillButton } from '../components/FavoriteStarButton';
+import {
+  SHARED_LIST_FAVORITES_STORAGE_KEY,
+  readSharedListFavorites,
+  writeSharedListFavorites,
+  type SharedListFavorite,
+} from '../utils/sharedListFavorites';
 
 const API_URL = import.meta.env.VITE_MAIN_API;
 const TMDB_API_KEY = import.meta.env.VITE_TMDB_API_KEY || '';
@@ -40,6 +47,26 @@ interface SharedListData {
   cachedAt: number;
 }
 
+interface StoredMediaFavorite {
+  id: number;
+  type: 'movie' | 'tv';
+  title: string;
+  poster_path: string;
+  addedAt: string;
+}
+
+const WATCHLIST_MOVIE_STORAGE_KEY = 'watchlist_movie';
+const WATCHLIST_TV_STORAGE_KEY = 'watchlist_tv';
+
+const readStoredMediaWatchlist = (storageKey: string): StoredMediaFavorite[] => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(storageKey) || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
 const SharedListPage: React.FC = () => {
   const { t } = useTranslation();
   const { shareCode } = useParams<{ shareCode: string }>();
@@ -55,9 +82,18 @@ const SharedListPage: React.FC = () => {
   const [reportDetails, setReportDetails] = useState('');
   const [reportSubmitting, setReportSubmitting] = useState(false);
   const [reported, setReported] = useState(false);
+  const [favoriteLists, setFavoriteLists] = useState<SharedListFavorite[]>(() => readSharedListFavorites());
+  const [watchlistMovieItems, setWatchlistMovieItems] = useState<StoredMediaFavorite[]>(() => readStoredMediaWatchlist(WATCHLIST_MOVIE_STORAGE_KEY));
+  const [watchlistTvItems, setWatchlistTvItems] = useState<StoredMediaFavorite[]>(() => readStoredMediaWatchlist(WATCHLIST_TV_STORAGE_KEY));
 
   const isAuthenticated = !!localStorage.getItem('auth_token');
   const profileId = localStorage.getItem('selected_profile_id');
+  const isFavoriteList = useMemo(
+    () => favoriteLists.some((favorite) => favorite.shareCode === shareCode),
+    [favoriteLists, shareCode]
+  );
+  const watchlistMovieIds = useMemo(() => new Set(watchlistMovieItems.map((item) => item.id)), [watchlistMovieItems]);
+  const watchlistTvIds = useMemo(() => new Set(watchlistTvItems.map((item) => item.id)), [watchlistTvItems]);
 
   const REPORT_REASONS = [
     { value: 'spam', label: t('comments.reportReasons.spam', 'Spam') },
@@ -100,19 +136,46 @@ const SharedListPage: React.FC = () => {
   };
 
   // Masquer le footer
-  useLayoutEffect(() => {
-    const footer = document.querySelector('footer');
-    if (footer) {
-      footer.style.display = 'none';
-    }
-    document.body.classList.add('no-footer-page');
+  useEffect(() => undefined, []);
 
-    return () => {
-      if (footer) {
-        footer.style.display = '';
+  useEffect(() => {
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === SHARED_LIST_FAVORITES_STORAGE_KEY) {
+        setFavoriteLists(readSharedListFavorites());
       }
-      document.body.classList.remove('no-footer-page');
+      if (event.key === WATCHLIST_MOVIE_STORAGE_KEY) {
+        setWatchlistMovieItems(readStoredMediaWatchlist(WATCHLIST_MOVIE_STORAGE_KEY));
+      }
+      if (event.key === WATCHLIST_TV_STORAGE_KEY) {
+        setWatchlistTvItems(readStoredMediaWatchlist(WATCHLIST_TV_STORAGE_KEY));
+      }
     };
+
+    window.addEventListener('storage', handleStorage);
+    return () => window.removeEventListener('storage', handleStorage);
+  }, []);
+
+  const persistFavoriteLists = useCallback((nextFavorites: SharedListFavorite[]) => {
+    setFavoriteLists(nextFavorites);
+    writeSharedListFavorites(nextFavorites);
+  }, []);
+
+  const persistWatchlistMovieItems = useCallback((nextWatchlist: StoredMediaFavorite[]) => {
+    setWatchlistMovieItems(nextWatchlist);
+    try {
+      localStorage.setItem(WATCHLIST_MOVIE_STORAGE_KEY, JSON.stringify(nextWatchlist));
+    } catch {
+      // Ignore storage errors
+    }
+  }, []);
+
+  const persistWatchlistTvItems = useCallback((nextWatchlist: StoredMediaFavorite[]) => {
+    setWatchlistTvItems(nextWatchlist);
+    try {
+      localStorage.setItem(WATCHLIST_TV_STORAGE_KEY, JSON.stringify(nextWatchlist));
+    } catch {
+      // Ignore storage errors
+    }
   }, []);
 
   // Charger les données de la liste partagée
@@ -211,6 +274,91 @@ const SharedListPage: React.FC = () => {
       toast.success(t('common.linkCopied'));
     });
   };
+
+  const handleToggleFavorite = useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (!shareCode || !listData) return;
+
+    if (isFavoriteList) {
+      const nextFavorites = favoriteLists.filter((favorite) => favorite.shareCode !== shareCode);
+      persistFavoriteLists(nextFavorites);
+      toast.success(`${listData.listName} ${t('lists.removedFromFavoritesToast')}`, { duration: 2000 });
+      return;
+    }
+
+    const nextFavorites = [
+      ...favoriteLists,
+      {
+        shareCode,
+        listName: listData.listName,
+        username: listData.username,
+        avatar: listData.avatar,
+        isVip: listData.isVip,
+        itemCount: listData.itemCount,
+        addedAt: new Date().toISOString(),
+      }
+    ];
+
+    persistFavoriteLists(nextFavorites);
+    toast.success(`${listData.listName} ${t('lists.addedToFavoritesToast')}`, { duration: 2000 });
+  }, [favoriteLists, isFavoriteList, listData, persistFavoriteLists, shareCode, t]);
+
+  const isWatchlistMediaItem = useCallback((item: Pick<SharedListItem, 'id' | 'type'>) => {
+    const mediaId = Number(item.id);
+    if (item.type === 'movie') return watchlistMovieIds.has(mediaId);
+    if (item.type === 'tv') return watchlistTvIds.has(mediaId);
+    return false;
+  }, [watchlistMovieIds, watchlistTvIds]);
+
+  const handleToggleMediaWatchlist = useCallback((
+    event: React.MouseEvent<HTMLButtonElement>,
+    item: Pick<SharedListItem, 'id' | 'type' | 'title' | 'name' | 'poster_path'>
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+
+    const mediaId = Number(item.id);
+    if (Number.isNaN(mediaId)) return;
+
+    const itemToSave: StoredMediaFavorite = {
+      id: mediaId,
+      type: item.type === 'tv' ? 'tv' : 'movie',
+      title: item.title || item.name || '',
+      poster_path: item.poster_path || '',
+      addedAt: new Date().toISOString(),
+    };
+
+    if (item.type === 'movie') {
+      if (watchlistMovieIds.has(mediaId)) {
+        persistWatchlistMovieItems(watchlistMovieItems.filter((watchlist) => watchlist.id !== mediaId));
+        toast.success(t('search.removedFromWatchlist'), { duration: 2000 });
+        return;
+      }
+
+      persistWatchlistMovieItems([
+        itemToSave,
+        ...watchlistMovieItems.filter((watchlist) => watchlist.id !== mediaId),
+      ]);
+      toast.success(t('search.addedToWatchlist'), { duration: 2000 });
+      return;
+    }
+
+    if (item.type === 'tv') {
+      if (watchlistTvIds.has(mediaId)) {
+        persistWatchlistTvItems(watchlistTvItems.filter((watchlist) => watchlist.id !== mediaId));
+        toast.success(t('search.removedFromWatchlist'), { duration: 2000 });
+        return;
+      }
+
+      persistWatchlistTvItems([
+        itemToSave,
+        ...watchlistTvItems.filter((watchlist) => watchlist.id !== mediaId),
+      ]);
+      toast.success(t('search.addedToWatchlist'), { duration: 2000 });
+    }
+  }, [persistWatchlistMovieItems, persistWatchlistTvItems, t, watchlistMovieIds, watchlistMovieItems, watchlistTvIds, watchlistTvItems]);
 
   const containerVariants = {
     hidden: { opacity: 0 },
@@ -392,6 +540,16 @@ const SharedListPage: React.FC = () => {
             transition={{ delay: 0.5 }}
             className="mt-6 flex items-center justify-center gap-3 flex-wrap"
           >
+            {shareCode && listData && (
+              <FavoriteStarPillButton
+                active={isFavoriteList}
+                activeLabel={t('lists.removeFromFavorites')}
+                inactiveLabel={t('lists.addToFavorites')}
+                activeText={t('common.favorites')}
+                inactiveText={t('lists.addToFavorites')}
+                onToggle={handleToggleFavorite}
+              />
+            )}
             <button
               onClick={handleCopyLink}
               className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-white/5 border border-white/10 hover:border-purple-500/40 hover:bg-purple-500/10 transition-all text-sm text-white/60 hover:text-white"
@@ -451,6 +609,8 @@ const SharedListPage: React.FC = () => {
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
               {displayItems.map((item, index) => {
                 const badge = getTypeBadge(item.type);
+                const canWatchlistMedia = item.type === 'movie' || item.type === 'tv';
+                const isWatchlistMedia = canWatchlistMedia ? isWatchlistMediaItem(item) : false;
                 return (
                   <motion.div
                     key={`${item.type}-${item.id}`}
@@ -460,6 +620,15 @@ const SharedListPage: React.FC = () => {
                   >
                     <Link to={getItemLink(item)}>
                       <div className="relative rounded-xl overflow-hidden bg-white/5 border border-white/10 group-hover:border-purple-500/30 transition-colors shadow-lg group-hover:shadow-purple-500/10">
+                        {canWatchlistMedia && (
+                          <FavoriteStarIconButton
+                            active={isWatchlistMedia}
+                            activeLabel={t('common.removeFromWatchlist')}
+                            inactiveLabel={t('common.addToWatchlist')}
+                            onToggle={(event) => handleToggleMediaWatchlist(event, item)}
+                            className="absolute top-2 right-2 z-20 h-9 w-9 backdrop-blur-sm opacity-100 md:opacity-0 md:group-hover:opacity-100"
+                          />
+                        )}
                         <div className="aspect-[2/3] relative overflow-hidden">
                           {item.poster_path ? (
                             <img
@@ -506,7 +675,7 @@ const SharedListPage: React.FC = () => {
                         </div>
 
                         {/* Numéro */}
-                        <div className="absolute top-2 right-2 z-10">
+                        <div className={`absolute top-2 z-10 ${canWatchlistMedia ? 'right-12' : 'right-2'}`}>
                           <span className="text-[10px] py-0.5 px-1.5 rounded font-mono font-medium bg-black/60 text-white/70 border border-white/10">
                             #{index + 1}
                           </span>

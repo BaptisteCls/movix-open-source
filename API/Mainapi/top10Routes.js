@@ -14,12 +14,40 @@ const TMDB_API_URL = "https://api.themoviedb.org/3";
 let pool = null;
 let redis = null;
 
-const CACHE_REFRESH = 1800; // 30 min — seuil de rafraîchissement en arrière-plan
-const CACHE_TTL = 86400; // 24h — TTL Redis réel (stale-while-revalidate)
+const CACHE_REFRESH = 1800; // 30 min before background refresh
+const CACHE_TTL = 86400; // 24h Redis TTL
 const CACHE_PREFIX = "top10:";
+const LOCK_PREFIX = `${CACHE_PREFIX}lock:`;
+const LOCK_TTL = 120; // seconds
+const LOCK_WAIT_MS = 2500;
+const LOCK_POLL_MS = 100;
 
-// Verrous en mémoire pour éviter les rafraîchissements simultanés
+// In-memory locks to avoid duplicate background refreshes.
 const refreshLocks = new Set();
+
+const TOP10_TYPE_CONFIG = {
+  movies: {
+    contentType: "movie",
+    minDuration: 1200,
+    tmdbType: "movie",
+    emptyLabel: "Film",
+    withEpisodes: false,
+  },
+  tv: {
+    contentType: "tv",
+    minDuration: 300,
+    tmdbType: "tv",
+    emptyLabel: "Serie",
+    withEpisodes: true,
+  },
+  anime: {
+    contentType: "anime",
+    minDuration: 300,
+    tmdbType: "anime",
+    emptyLabel: "Anime",
+    withEpisodes: true,
+  },
+};
 
 /**
  * Initialize with MySQL pool and Redis instance
@@ -30,9 +58,8 @@ function initTop10Routes(mysqlPool, redisInstance) {
 }
 
 /**
- * Redis cache helpers — stale-while-revalidate
- * On stocke { data, updatedAt } avec un TTL long (24h).
- * Si updatedAt > 30min, on rafraîchit en arrière-plan.
+ * Redis cache helpers - stale-while-revalidate.
+ * Stored shape: { data, updatedAt }
  */
 async function cacheGet(key) {
   if (!redis) return null;
@@ -65,8 +92,121 @@ function isStale(wrapper) {
   return Date.now() - wrapper.updatedAt > CACHE_REFRESH * 1000;
 }
 
+function getTop10TypeConfig(type) {
+  return type ? TOP10_TYPE_CONFIG[type] || null : null;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function getLockStorageKey(key) {
+  return `${LOCK_PREFIX}${key}`;
+}
+
+function acquireLocalLock(lockKey) {
+  if (refreshLocks.has(lockKey)) {
+    return null;
+  }
+
+  refreshLocks.add(lockKey);
+  return { key: lockKey, local: true };
+}
+
+async function acquireDistributedLock(key) {
+  const lockKey = getLockStorageKey(key);
+
+  if (!redis) {
+    return acquireLocalLock(lockKey);
+  }
+
+  const owner = `${process.pid}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+
+  try {
+    const result = await redis.set(lockKey, owner, "EX", LOCK_TTL, "NX");
+    if (result === "OK") {
+      return { key: lockKey, owner, local: false };
+    }
+    return null;
+  } catch (err) {
+    console.warn("[Top10] Redis LOCK error:", err.message);
+    return acquireLocalLock(lockKey);
+  }
+}
+
+async function releaseDistributedLock(lock) {
+  if (!lock) return;
+
+  if (lock.local) {
+    refreshLocks.delete(lock.key);
+    return;
+  }
+
+  if (!redis) return;
+
+  try {
+    await redis.eval(
+      "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+      1,
+      lock.key,
+      lock.owner,
+    );
+  } catch (err) {
+    console.warn("[Top10] Redis UNLOCK error:", err.message);
+  }
+}
+
+async function waitForCachedPayload(key, timeoutMs = LOCK_WAIT_MS) {
+  if (!redis) return null;
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await sleep(LOCK_POLL_MS);
+    const wrapper = await cacheGet(key);
+    if (wrapper && wrapper.data) {
+      return wrapper.data;
+    }
+  }
+
+  return null;
+}
+
+async function buildWithCacheLock(key, builder) {
+  const lock = await acquireDistributedLock(key);
+
+  if (!lock) {
+    const cachedPayload = await waitForCachedPayload(key);
+    if (cachedPayload) {
+      return cachedPayload;
+    }
+  }
+
+  try {
+    const result = await builder();
+    await cacheSet(key, result);
+    return result;
+  } finally {
+    if (lock) {
+      await releaseDistributedLock(lock);
+    }
+  }
+}
+
+function scheduleBackgroundRefresh(key, refreshTask) {
+  void (async () => {
+    const lock = await acquireDistributedLock(key);
+    if (!lock) return;
+
+    try {
+      await refreshTask();
+    } finally {
+      await releaseDistributedLock(lock);
+    }
+  })();
+}
+
 /**
- * Fetch TMDB details for enrichment (via tmdbCache Redis centralisé)
+ * Fetch TMDB details for enrichment via shared Redis cache.
  */
 async function fetchTMDBDetails(contentId, contentType) {
   if (contentType === "live-tv") return null;
@@ -87,18 +227,102 @@ async function fetchTMDBDetails(contentId, contentType) {
     backdrop_path: data.backdrop_path,
     overview: data.overview,
     vote_average: data.vote_average || null,
-    genres: (data.genres || []).map((g) =>
-      typeof g === "string" ? g : g.name,
+    genres: (data.genres || []).map((genre) =>
+      typeof genre === "string" ? genre : genre.name,
     ),
     release_date: data.release_date || data.first_air_date || null,
     runtime: data.runtime || data.episode_run_time?.[0] || null,
   };
 }
 
+async function getTop10Response(category) {
+  const wrapper = await cacheGet(category);
+  if (wrapper && wrapper.data) {
+    if (isStale(wrapper)) {
+      scheduleBackgroundRefresh(category, () => refreshTop10(category));
+    }
+    return wrapper.data;
+  }
+
+  const builder = builders[category];
+  if (!builder) {
+    throw new Error(`Unknown Top10 category: ${category}`);
+  }
+
+  return buildWithCacheLock(category, builder);
+}
+
+async function buildStatsResult(requestedType, typeConfig) {
+  let statsQuery = `
+    SELECT
+      COUNT(DISTINCT user_id) AS total_active_users,
+      COUNT(DISTINCT content_id) AS total_unique_content,
+      ROUND(SUM(watch_duration) / 3600, 0) AS total_hours_watched,
+      COUNT(*) AS total_sessions,
+      ROUND(AVG(watch_duration) / 60, 0) AS avg_session_minutes,
+      MIN(created_at) AS data_from,
+      MAX(created_at) AS data_to
+    FROM wrapped_viewing_data
+    WHERE watch_duration >= ?
+  `;
+  let statsParams = [300];
+
+  if (typeConfig) {
+    statsQuery = `
+      SELECT
+        COUNT(DISTINCT user_id) AS total_active_users,
+        COUNT(DISTINCT content_id) AS total_unique_content,
+        ROUND(SUM(watch_duration) / 3600, 0) AS total_hours_watched,
+        COUNT(*) AS total_sessions,
+        ROUND(AVG(watch_duration) / 60, 0) AS avg_session_minutes,
+        MIN(created_at) AS data_from,
+        MAX(created_at) AS data_to
+      FROM wrapped_viewing_data
+      WHERE content_type = ?
+        AND watch_duration >= ?
+    `;
+    statsParams = [typeConfig.contentType, typeConfig.minDuration];
+  }
+
+  const [stats] = await pool.execute(statsQuery, statsParams);
+  const row = stats[0] || {};
+
+  return {
+    success: true,
+    type: requestedType || "global",
+    stats: {
+      totalActiveUsers: parseInt(row.total_active_users) || 0,
+      totalUniqueContent: parseInt(row.total_unique_content) || 0,
+      totalHoursWatched: parseInt(row.total_hours_watched) || 0,
+      totalSessions: parseInt(row.total_sessions) || 0,
+      avgSessionMinutes: parseInt(row.avg_session_minutes) || 0,
+      dataFrom: row.data_from ? new Date(row.data_from).toISOString() : null,
+      dataTo: row.data_to ? new Date(row.data_to).toISOString() : null,
+    },
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+async function getStatsResponse(requestedType, typeConfig) {
+  const cacheKey = requestedType ? `stats:${requestedType}` : "stats";
+  const wrapper = await cacheGet(cacheKey);
+  if (wrapper && wrapper.data) {
+    if (isStale(wrapper)) {
+      scheduleBackgroundRefresh(cacheKey, () =>
+        refreshStats(requestedType, typeConfig),
+      );
+    }
+    return wrapper.data;
+  }
+
+  return buildWithCacheLock(cacheKey, () =>
+    buildStatsResult(requestedType, typeConfig),
+  );
+}
+
 /**
  * GET /api/top10/movies
  * Public - no auth required
- * Returns top 10 most watched movies across all logged-in users
  */
 router.get("/movies", async (req, res) => {
   try {
@@ -108,21 +332,7 @@ router.get("/movies", async (req, res) => {
         .json({ success: false, error: "Database not available" });
     }
 
-    // Stale-while-revalidate : renvoyer le cache immédiatement, rafraîchir en arrière-plan
-    const wrapper = await cacheGet("movies");
-    if (wrapper && wrapper.data) {
-      res.json(wrapper.data);
-      // Rafraîchir en arrière-plan si périmé
-      if (isStale(wrapper) && !refreshLocks.has("movies")) {
-        refreshLocks.add("movies");
-        refreshTop10("movies").finally(() => refreshLocks.delete("movies"));
-      }
-      return;
-    }
-
-    // Pas de cache du tout — requête synchrone
-    const result = await buildTop10Movies();
-    await cacheSet("movies", result);
+    const result = await getTop10Response("movies");
     res.json(result);
   } catch (error) {
     console.error("[Top10] Error fetching movies:", error);
@@ -133,7 +343,6 @@ router.get("/movies", async (req, res) => {
 /**
  * GET /api/top10/tv
  * Public - no auth required
- * Returns top 10 most watched TV series across all logged-in users
  */
 router.get("/tv", async (req, res) => {
   try {
@@ -143,18 +352,7 @@ router.get("/tv", async (req, res) => {
         .json({ success: false, error: "Database not available" });
     }
 
-    const wrapper = await cacheGet("tv");
-    if (wrapper && wrapper.data) {
-      res.json(wrapper.data);
-      if (isStale(wrapper) && !refreshLocks.has("tv")) {
-        refreshLocks.add("tv");
-        refreshTop10("tv").finally(() => refreshLocks.delete("tv"));
-      }
-      return;
-    }
-
-    const result = await buildTop10Tv();
-    await cacheSet("tv", result);
+    const result = await getTop10Response("tv");
     res.json(result);
   } catch (error) {
     console.error("[Top10] Error fetching TV:", error);
@@ -165,7 +363,6 @@ router.get("/tv", async (req, res) => {
 /**
  * GET /api/top10/anime
  * Public - no auth required
- * Returns top 10 most watched anime across all logged-in users
  */
 router.get("/anime", async (req, res) => {
   try {
@@ -175,18 +372,7 @@ router.get("/anime", async (req, res) => {
         .json({ success: false, error: "Database not available" });
     }
 
-    const wrapper = await cacheGet("anime");
-    if (wrapper && wrapper.data) {
-      res.json(wrapper.data);
-      if (isStale(wrapper) && !refreshLocks.has("anime")) {
-        refreshLocks.add("anime");
-        refreshTop10("anime").finally(() => refreshLocks.delete("anime"));
-      }
-      return;
-    }
-
-    const result = await buildTop10Anime();
-    await cacheSet("anime", result);
+    const result = await getTop10Response("anime");
     res.json(result);
   } catch (error) {
     console.error("[Top10] Error fetching anime:", error);
@@ -195,10 +381,61 @@ router.get("/anime", async (req, res) => {
 });
 
 /**
+ * GET /api/top10/overview?type=movies|tv|anime
+ * Public - returns ranking + stats for one category
+ */
+router.get("/overview", async (req, res) => {
+  try {
+    if (!pool) {
+      return res
+        .status(503)
+        .json({ success: false, error: "Database not available" });
+    }
+
+    const requestedType =
+      typeof req.query.type === "string"
+        ? req.query.type.toLowerCase()
+        : "movies";
+    const typeConfig = getTop10TypeConfig(requestedType);
+
+    if (!typeConfig) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid type. Allowed values: movies, tv, anime",
+      });
+    }
+
+    const [top10Result, statsResult] = await Promise.allSettled([
+      getTop10Response(requestedType),
+      getStatsResponse(requestedType, typeConfig),
+    ]);
+
+    if (top10Result.status !== "fulfilled") {
+      throw top10Result.reason;
+    }
+
+    const top10Payload = top10Result.value;
+    const statsPayload =
+      statsResult.status === "fulfilled" ? statsResult.value : null;
+
+    res.json({
+      success: true,
+      type: requestedType,
+      top10: top10Payload.top10,
+      stats: statsPayload?.stats || null,
+      updatedAt: top10Payload.updatedAt,
+      statsUpdatedAt: statsPayload?.updatedAt || null,
+    });
+  } catch (error) {
+    console.error("[Top10] Error fetching overview:", error);
+    res.status(500).json({ success: false, error: "Internal server error" });
+  }
+});
+
+/**
  * GET /api/top10/stats
  * Public - global platform stats
- * Optional query param:
- * - type=movies|tv|anime to get stats per category
+ * Optional query param: type=movies|tv|anime
  */
 router.get("/stats", async (req, res) => {
   try {
@@ -210,13 +447,7 @@ router.get("/stats", async (req, res) => {
 
     const requestedType =
       typeof req.query.type === "string" ? req.query.type.toLowerCase() : null;
-    const typeConfig = requestedType
-      ? {
-          movies: { contentType: "movie", minDuration: 1200 },
-          tv: { contentType: "tv", minDuration: 300 },
-          anime: { contentType: "anime", minDuration: 300 },
-        }[requestedType]
-      : null;
+    const typeConfig = getTop10TypeConfig(requestedType);
 
     if (requestedType && !typeConfig) {
       return res.status(400).json({
@@ -225,73 +456,7 @@ router.get("/stats", async (req, res) => {
       });
     }
 
-    const cacheKey = requestedType ? `stats:${requestedType}` : "stats";
-    const wrapper = await cacheGet(cacheKey);
-    if (wrapper && wrapper.data) {
-      res.json(wrapper.data);
-      if (isStale(wrapper) && !refreshLocks.has(cacheKey)) {
-        refreshLocks.add(cacheKey);
-        refreshStats(requestedType, typeConfig).finally(() =>
-          refreshLocks.delete(cacheKey),
-        );
-      }
-      return;
-    }
-
-    let statsQuery = `
-            SELECT
-                COUNT(DISTINCT user_id) AS total_active_users,
-                COUNT(DISTINCT content_id) AS total_unique_content,
-                ROUND(SUM(watch_duration) / 3600, 0) AS total_hours_watched,
-                COUNT(*) AS total_sessions,
-                ROUND(AVG(watch_duration) / 60, 0) AS avg_session_minutes,
-                MIN(created_at) AS data_from,
-                MAX(created_at) AS data_to
-            FROM wrapped_viewing_data
-            WHERE watch_duration >= ?
-        `;
-    let statsParams = [300];
-
-    // watch_duration is stored in SECONDS
-    if (typeConfig) {
-      statsQuery = `
-                SELECT
-                    COUNT(DISTINCT user_id) AS total_active_users,
-                    COUNT(DISTINCT content_id) AS total_unique_content,
-                    ROUND(SUM(watch_duration) / 3600, 0) AS total_hours_watched,
-                    COUNT(*) AS total_sessions,
-                    ROUND(AVG(watch_duration) / 60, 0) AS avg_session_minutes,
-                    MIN(created_at) AS data_from,
-                    MAX(created_at) AS data_to
-                FROM wrapped_viewing_data
-                WHERE content_type = ?
-                  AND watch_duration >= ?
-            `;
-      statsParams = [typeConfig.contentType, typeConfig.minDuration];
-    }
-
-    const [stats] = await pool.execute(statsQuery, statsParams);
-
-    const result = {
-      success: true,
-      type: requestedType || "global",
-      stats: {
-        totalActiveUsers: parseInt(stats[0].total_active_users) || 0,
-        totalUniqueContent: parseInt(stats[0].total_unique_content) || 0,
-        totalHoursWatched: parseInt(stats[0].total_hours_watched) || 0,
-        totalSessions: parseInt(stats[0].total_sessions) || 0,
-        avgSessionMinutes: parseInt(stats[0].avg_session_minutes) || 0,
-        dataFrom: stats[0].data_from
-          ? new Date(stats[0].data_from).toISOString()
-          : null,
-        dataTo: stats[0].data_to
-          ? new Date(stats[0].data_to).toISOString()
-          : null,
-      },
-      updatedAt: new Date().toISOString(),
-    };
-
-    await cacheSet(cacheKey, result);
+    const result = await getStatsResponse(requestedType, typeConfig);
     res.json(result);
   } catch (error) {
     console.error("[Top10] Error fetching stats:", error);
@@ -300,153 +465,116 @@ router.get("/stats", async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// Fonctions de construction des top 10 (extraites des routes pour réutilisation)
+// Top 10 builders
 // ---------------------------------------------------------------------------
 
 async function buildTop10Movies() {
-  const [rows] = await pool.execute(`
-        SELECT
-            content_id,
-            MAX(content_title) AS content_title,
-            COUNT(DISTINCT user_id) AS unique_viewers,
-            ROUND(SUM(watch_duration) / 3600, 1) AS total_hours,
-            COUNT(*) AS total_sessions,
-            ROUND(AVG(watch_duration) / 60, 0) AS avg_session_minutes
-        FROM wrapped_viewing_data
-        WHERE content_type = 'movie'
-          AND watch_duration >= 1200
-        GROUP BY content_id
-        ORDER BY unique_viewers DESC, total_hours DESC
-        LIMIT 10
-    `);
-
-  const enriched = await Promise.all(
-    rows.map(async (row, index) => {
-      const tmdb = await fetchTMDBDetails(row.content_id, "movie");
-      return {
-        rank: index + 1,
-        contentId: row.content_id,
-        title: tmdb?.title || row.content_title || `Film #${row.content_id}`,
-        posterPath: tmdb?.poster_path || null,
-        backdropPath: tmdb?.backdrop_path || null,
-        overview: tmdb?.overview || null,
-        voteAverage: tmdb?.vote_average || null,
-        genres: tmdb?.genres || [],
-        releaseDate: tmdb?.release_date || null,
-        uniqueViewers: parseInt(row.unique_viewers),
-        totalHours: parseFloat(row.total_hours),
-        totalSessions: parseInt(row.total_sessions),
-        avgSessionMinutes: parseInt(row.avg_session_minutes),
-      };
-    }),
-  );
-
-  return {
-    success: true,
-    type: "movies",
-    top10: enriched,
-    updatedAt: new Date().toISOString(),
-  };
+  return buildTop10ByCategory("movies");
 }
 
 async function buildTop10Tv() {
-  const [rows] = await pool.execute(`
-        SELECT
-            content_id,
-            MAX(content_title) AS content_title,
-            COUNT(DISTINCT user_id) AS unique_viewers,
-            ROUND(SUM(watch_duration) / 3600, 1) AS total_hours,
-            COUNT(*) AS total_sessions,
-            ROUND(AVG(watch_duration) / 60, 0) AS avg_session_minutes,
-            COUNT(DISTINCT CONCAT(IFNULL(season_number, ''), '-', IFNULL(episode_number, ''))) AS episodes_watched
-        FROM wrapped_viewing_data
-        WHERE content_type = 'tv'
-          AND watch_duration >= 300
-        GROUP BY content_id
-        ORDER BY unique_viewers DESC, total_hours DESC
-        LIMIT 10
-    `);
-
-  const enriched = await Promise.all(
-    rows.map(async (row, index) => {
-      const tmdb = await fetchTMDBDetails(row.content_id, "tv");
-      return {
-        rank: index + 1,
-        contentId: row.content_id,
-        title: tmdb?.title || row.content_title || `Série #${row.content_id}`,
-        posterPath: tmdb?.poster_path || null,
-        backdropPath: tmdb?.backdrop_path || null,
-        overview: tmdb?.overview || null,
-        voteAverage: tmdb?.vote_average || null,
-        genres: tmdb?.genres || [],
-        releaseDate: tmdb?.release_date || null,
-        uniqueViewers: parseInt(row.unique_viewers),
-        totalHours: parseFloat(row.total_hours),
-        totalSessions: parseInt(row.total_sessions),
-        avgSessionMinutes: parseInt(row.avg_session_minutes),
-        episodesWatched: parseInt(row.episodes_watched),
-      };
-    }),
-  );
-
-  return {
-    success: true,
-    type: "tv",
-    top10: enriched,
-    updatedAt: new Date().toISOString(),
-  };
+  return buildTop10ByCategory("tv");
 }
 
 async function buildTop10Anime() {
-  const [rows] = await pool.execute(`
-        SELECT
-            content_id,
-            MAX(content_title) AS content_title,
-            COUNT(DISTINCT user_id) AS unique_viewers,
-            ROUND(SUM(watch_duration) / 3600, 1) AS total_hours,
-            COUNT(*) AS total_sessions,
-            ROUND(AVG(watch_duration) / 60, 0) AS avg_session_minutes,
-            COUNT(DISTINCT CONCAT(IFNULL(season_number, ''), '-', IFNULL(episode_number, ''))) AS episodes_watched
-        FROM wrapped_viewing_data
-        WHERE content_type = 'anime'
-          AND watch_duration >= 300
-        GROUP BY content_id
-        ORDER BY unique_viewers DESC, total_hours DESC
-        LIMIT 10
-    `);
+  return buildTop10ByCategory("anime");
+}
+
+async function loadEpisodesWatchedMap(config, contentIds) {
+  if (!config.withEpisodes || contentIds.length === 0) {
+    return new Map();
+  }
+
+  const placeholders = contentIds.map(() => "?").join(", ");
+  const [rows] = await pool.execute(
+    `
+      SELECT
+        content_id,
+        COUNT(DISTINCT CONCAT(IFNULL(season_number, ''), '-', IFNULL(episode_number, ''))) AS episodes_watched
+      FROM wrapped_viewing_data
+      WHERE content_type = ?
+        AND watch_duration >= ?
+        AND content_id IN (${placeholders})
+      GROUP BY content_id
+    `,
+    [config.contentType, config.minDuration, ...contentIds],
+  );
+
+  return new Map(
+    rows.map((row) => [
+      String(row.content_id),
+      parseInt(row.episodes_watched) || 0,
+    ]),
+  );
+}
+
+async function buildTop10ByCategory(category) {
+  const config = getTop10TypeConfig(category);
+  if (!config) {
+    throw new Error(`Unknown Top10 category: ${category}`);
+  }
+
+  const [rows] = await pool.execute(
+    `
+      SELECT
+        content_id,
+        MAX(content_title) AS content_title,
+        COUNT(DISTINCT user_id) AS unique_viewers,
+        ROUND(SUM(watch_duration) / 3600, 1) AS total_hours,
+        COUNT(*) AS total_sessions,
+        ROUND(AVG(watch_duration) / 60, 0) AS avg_session_minutes
+      FROM wrapped_viewing_data
+      WHERE content_type = ?
+        AND watch_duration >= ?
+      GROUP BY content_id
+      ORDER BY unique_viewers DESC, total_hours DESC
+      LIMIT 10
+    `,
+    [config.contentType, config.minDuration],
+  );
+
+  const episodesByContentId = await loadEpisodesWatchedMap(
+    config,
+    rows.map((row) => row.content_id),
+  );
 
   const enriched = await Promise.all(
     rows.map(async (row, index) => {
-      const tmdb = await fetchTMDBDetails(row.content_id, "anime");
+      const tmdb = await fetchTMDBDetails(row.content_id, config.tmdbType);
       return {
         rank: index + 1,
         contentId: row.content_id,
-        title: tmdb?.title || row.content_title || `Anime #${row.content_id}`,
+        title:
+          tmdb?.title ||
+          row.content_title ||
+          `${config.emptyLabel} #${row.content_id}`,
         posterPath: tmdb?.poster_path || null,
         backdropPath: tmdb?.backdrop_path || null,
         overview: tmdb?.overview || null,
         voteAverage: tmdb?.vote_average || null,
         genres: tmdb?.genres || [],
         releaseDate: tmdb?.release_date || null,
-        uniqueViewers: parseInt(row.unique_viewers),
-        totalHours: parseFloat(row.total_hours),
-        totalSessions: parseInt(row.total_sessions),
-        avgSessionMinutes: parseInt(row.avg_session_minutes),
-        episodesWatched: parseInt(row.episodes_watched),
+        uniqueViewers: parseInt(row.unique_viewers) || 0,
+        totalHours: parseFloat(row.total_hours) || 0,
+        totalSessions: parseInt(row.total_sessions) || 0,
+        avgSessionMinutes: parseInt(row.avg_session_minutes) || 0,
+        episodesWatched: config.withEpisodes
+          ? episodesByContentId.get(String(row.content_id)) || 0
+          : undefined,
       };
     }),
   );
 
   return {
     success: true,
-    type: "anime",
+    type: category,
     top10: enriched,
     updatedAt: new Date().toISOString(),
   };
 }
 
 // ---------------------------------------------------------------------------
-// Rafraîchissement en arrière-plan (stale-while-revalidate)
+// Background refresh (stale-while-revalidate)
 // ---------------------------------------------------------------------------
 
 const builders = {
@@ -461,71 +589,20 @@ async function refreshTop10(category) {
     if (!builder) return;
     const result = await builder();
     await cacheSet(category, result);
-    console.log(`[Top10] Cache ${category} rafraîchi en arrière-plan`);
+    console.log(`[Top10] Cache ${category} refreshed in background`);
   } catch (err) {
-    console.error(`[Top10] Erreur rafraîchissement ${category}:`, err.message);
+    console.error(`[Top10] Refresh error for ${category}:`, err.message);
   }
 }
 
 async function refreshStats(requestedType, typeConfig) {
   try {
     const cacheKey = requestedType ? `stats:${requestedType}` : "stats";
-    let statsQuery, statsParams;
-
-    if (typeConfig) {
-      statsQuery = `
-                SELECT
-                    COUNT(DISTINCT user_id) AS total_active_users,
-                    COUNT(DISTINCT content_id) AS total_unique_content,
-                    ROUND(SUM(watch_duration) / 3600, 0) AS total_hours_watched,
-                    COUNT(*) AS total_sessions,
-                    ROUND(AVG(watch_duration) / 60, 0) AS avg_session_minutes,
-                    MIN(created_at) AS data_from,
-                    MAX(created_at) AS data_to
-                FROM wrapped_viewing_data
-                WHERE content_type = ?
-                  AND watch_duration >= ?
-            `;
-      statsParams = [typeConfig.contentType, typeConfig.minDuration];
-    } else {
-      statsQuery = `
-                SELECT
-                    COUNT(DISTINCT user_id) AS total_active_users,
-                    COUNT(DISTINCT content_id) AS total_unique_content,
-                    ROUND(SUM(watch_duration) / 3600, 0) AS total_hours_watched,
-                    COUNT(*) AS total_sessions,
-                    ROUND(AVG(watch_duration) / 60, 0) AS avg_session_minutes,
-                    MIN(created_at) AS data_from,
-                    MAX(created_at) AS data_to
-                FROM wrapped_viewing_data
-                WHERE watch_duration >= ?
-            `;
-      statsParams = [300];
-    }
-
-    const [stats] = await pool.execute(statsQuery, statsParams);
-    const result = {
-      success: true,
-      type: requestedType || "global",
-      stats: {
-        totalActiveUsers: parseInt(stats[0].total_active_users) || 0,
-        totalUniqueContent: parseInt(stats[0].total_unique_content) || 0,
-        totalHoursWatched: parseInt(stats[0].total_hours_watched) || 0,
-        totalSessions: parseInt(stats[0].total_sessions) || 0,
-        avgSessionMinutes: parseInt(stats[0].avg_session_minutes) || 0,
-        dataFrom: stats[0].data_from
-          ? new Date(stats[0].data_from).toISOString()
-          : null,
-        dataTo: stats[0].data_to
-          ? new Date(stats[0].data_to).toISOString()
-          : null,
-      },
-      updatedAt: new Date().toISOString(),
-    };
+    const result = await buildStatsResult(requestedType, typeConfig);
     await cacheSet(cacheKey, result);
-    console.log(`[Top10] Cache stats ${cacheKey} rafraîchi en arrière-plan`);
+    console.log(`[Top10] Cache stats ${cacheKey} refreshed in background`);
   } catch (err) {
-    console.error(`[Top10] Erreur rafraîchissement stats:`, err.message);
+    console.error("[Top10] Refresh error for stats:", err.message);
   }
 }
 

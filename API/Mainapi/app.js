@@ -118,7 +118,7 @@ const axiosFStream = axios.create({
 
 // Darkino session refresh
 let lastDarkinoHomeRequest = 0;
-const DARKINO_SESSION_REFRESH_INTERVAL = 10 * 60 * 1000; // 10 minutes
+const DARKINO_SESSION_REFRESH_INTERVAL = 5 * 60 * 1000; // 5 minutes
 
 const refreshDarkinoSessionIfNeeded = async () => {
   const now = Date.now();

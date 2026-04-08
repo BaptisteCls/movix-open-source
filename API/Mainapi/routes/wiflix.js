@@ -13,11 +13,14 @@ const fsp = require("fs").promises;
 
 const { memoryCache } = require("../config/redis");
 const {
-  CACHE_DIR,
   generateCacheKey,
   saveToCache,
 } = require("../utils/cacheManager");
-const { getProxyAgent, pickNextSocks5Proxy } = require("../utils/proxyManager");
+const {
+  PROXIES,
+  getProxyAgent,
+  pickNextSocks5Proxy,
+} = require("../utils/proxyManager");
 const {
   fetchTmdbDetails,
   fetchTmdbSeason,
@@ -26,7 +29,22 @@ const {
 
 const TMDB_API_KEY = process.env.TMDB_API_KEY || "";
 const TMDB_API_URL = "https://api.themoviedb.org/3";
-const WIFLIX_BASE_URL = "https://flemmix.golf";
+const WIFLIX_BASE_URL = "https://flemmix.farm";
+const WIFLIX_PROXY_POOL_NAME = "WIFLIX_SOCKS5_PROXIES";
+const WIFLIX_PROXY_MIN_INTERVAL_MS = 1000;
+const WIFLIX_PROXY_WAIT_TIMEOUT_MS = 1100;
+
+function hasWiflixProxyPool() {
+  return Array.isArray(PROXIES) && PROXIES.length > 0;
+}
+
+async function pickNextWiflixProxy() {
+  return pickNextSocks5Proxy({
+    poolName: WIFLIX_PROXY_POOL_NAME,
+    minIntervalMs: WIFLIX_PROXY_MIN_INTERVAL_MS,
+    waitTimeoutMs: WIFLIX_PROXY_WAIT_TIMEOUT_MS,
+  });
+}
 
 // === Cache helpers (local, since getFromCacheNoExpiration is not yet in cacheManager) ===
 const getFromCacheNoExpiration = async (cacheDir, key) => {
@@ -140,7 +158,7 @@ async function searchWiflixMovie(title, baseUrl = WIFLIX_BASE_URL) {
     let responseBody = null;
 
     // Utiliser le prochain proxy SOCKS5 pour répartir les requêtes sur tout le pool
-    const proxy = await pickNextSocks5Proxy();
+    const proxy = await pickNextWiflixProxy();
     if (proxy) {
       const proxyLabel = `${proxy.host}:${proxy.port}`;
       const agent = getProxyAgent(proxy);
@@ -165,8 +183,15 @@ async function searchWiflixMovie(title, baseUrl = WIFLIX_BASE_URL) {
         } catch (err) {
           proxyErrors.push(`${proxyLabel}: ${err.message}`);
         console.log(`[WIFLIX SEARCH] ${proxyLabel} échoué: ${err.message}`);
+        }
       }
-      }
+    } else if (hasWiflixProxyPool()) {
+      return {
+        url: null,
+        transient: true,
+        debugHtml:
+          "Pool sature: tous les proxies Wiflix sont occupes (1 req/s par proxy)",
+      };
     }
 
     // Fallback direct (sans proxy)
@@ -334,7 +359,7 @@ function extractWiflixReleaseDate($) {
 async function extractWiflixPlayers(pageUrl) {
   try {
     let rawHtml = null;
-    const proxy = await pickNextSocks5Proxy();
+    const proxy = await pickNextWiflixProxy();
     if (proxy) {
       const agent = getProxyAgent(proxy);
       if (!agent) {
@@ -366,6 +391,14 @@ async function extractWiflixPlayers(pageUrl) {
           );
         }
       }
+    } else if (hasWiflixProxyPool()) {
+      return {
+        players: [],
+        releaseYear: null,
+        transient: true,
+        debugHtml:
+          "Tous les proxies Wiflix sont occupes (1 req/s par proxy)",
+      };
     }
     if (!rawHtml) {
       // Fallback direct
@@ -472,7 +505,12 @@ async function extractWiflixPlayers(pageUrl) {
 
     return { players, releaseYear, debugHtml: players.length === 0 ? rawHtml : null };
   } catch (error) {
-    return { players: [], releaseYear: null, debugHtml: error.response?.data || null };
+    return {
+      players: [],
+      releaseYear: null,
+      transient: false,
+      debugHtml: error.response?.data || error.message || null,
+    };
   }
 }
 
@@ -519,6 +557,17 @@ async function fetchWiflixMovieData(tmdbId, cachedData = null) {
     let searchDebugHtml = null;
     for (const title of titlesToTry) {
       const searchResult = await searchWiflixMovie(title);
+      if (searchResult.transient) {
+        return {
+          success: false,
+          transient: true,
+          error: "Pool proxy Wiflix temporairement sature",
+          tmdb_id: tmdbId,
+          titles_tried: titlesToTry,
+          debugHtml: searchResult.debugHtml,
+          retry_after_ms: WIFLIX_PROXY_WAIT_TIMEOUT_MS,
+        };
+      }
       if (searchResult.url) { movieUrl = searchResult.url; break; }
       searchDebugHtml = searchResult.debugHtml;
     }
@@ -533,6 +582,17 @@ async function fetchWiflixMovieData(tmdbId, cachedData = null) {
       };
 
     const extractionResult = await extractWiflixPlayers(movieUrl);
+    if (extractionResult.transient) {
+      return {
+        success: false,
+        transient: true,
+        error: "Pool proxy Wiflix temporairement sature",
+        tmdb_id: tmdbId,
+        wiflix_url: movieUrl,
+        debugHtml: extractionResult.debugHtml,
+        retry_after_ms: WIFLIX_PROXY_WAIT_TIMEOUT_MS,
+      };
+    }
     const players = extractionResult.players;
     const wiflixReleaseYear = extractionResult.releaseYear;
 
@@ -630,6 +690,18 @@ async function fetchWiflixTvData(tmdbId, season, cachedData = null) {
     let searchDebugHtml = null;
     for (const title of titlesToTry) {
       const searchResult = await searchWiflixMovie(`${title} saison ${season}`);
+      if (searchResult.transient) {
+        return {
+          success: false,
+          transient: true,
+          error: "Pool proxy Wiflix temporairement sature",
+          tmdb_id: tmdbId,
+          season,
+          titles_tried: titlesToTry,
+          debugHtml: searchResult.debugHtml,
+          retry_after_ms: WIFLIX_PROXY_WAIT_TIMEOUT_MS,
+        };
+      }
       if (searchResult.url) { seriesUrl = searchResult.url; break; }
       searchDebugHtml = searchResult.debugHtml;
     }
@@ -645,6 +717,18 @@ async function fetchWiflixTvData(tmdbId, season, cachedData = null) {
       };
 
     const extractionResult = await extractWiflixPlayers(seriesUrl);
+    if (extractionResult.transient) {
+      return {
+        success: false,
+        transient: true,
+        error: "Pool proxy Wiflix temporairement sature",
+        tmdb_id: tmdbId,
+        season,
+        wiflix_url: seriesUrl,
+        debugHtml: extractionResult.debugHtml,
+        retry_after_ms: WIFLIX_PROXY_WAIT_TIMEOUT_MS,
+      };
+    }
     const players = extractionResult.players;
     const wiflixReleaseYear = extractionResult.releaseYear;
 
@@ -737,6 +821,10 @@ const updateWiflixCache = async (
           newData = await fetchWiflixTvData(tmdbId, season, existingCache);
         else throw new Error(`Type non supporte: ${type}`);
 
+        if (newData?.transient) {
+          return;
+        }
+
         if (
           typeof newData === "string" &&
           newData.includes("Maintenance en cours")
@@ -822,7 +910,9 @@ router.get("/movie/:tmdbId", async (req, res) => {
 
     if (!dataReturned) {
       const result = await fetchWiflixMovieData(tmdbId, null);
-      if (result.success) {
+      if (result.transient) {
+        res.status(503).json(result);
+      } else if (result.success) {
         const { debugHtml: _dh, ...cacheableResult } = result;
         await saveToCache(cacheDir, cacheKey, cacheableResult);
         res.json({ ...cacheableResult, next_update_in: '60m 0s' });
@@ -883,7 +973,9 @@ router.get("/tv/:tmdbId/:season", async (req, res) => {
 
     if (!dataReturned) {
       const result = await fetchWiflixTvData(tmdbId, season, null);
-      if (result.success) {
+      if (result.transient) {
+        res.status(503).json(result);
+      } else if (result.success) {
         const { debugHtml: _dh, ...cacheableResult } = result;
         await saveToCache(cacheDir, cacheKey, cacheableResult);
         res.json({ ...cacheableResult, next_update_in: '60m 0s' });

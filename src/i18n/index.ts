@@ -25,10 +25,11 @@ export const SUPPORTED_LANGUAGES = [
 export type SupportedLanguage = typeof SUPPORTED_LANGUAGES[number]['code'];
 
 // Languages that actually have translation files loaded
-const LOADED_LANG_CODES = new Set(['fr', 'en']);
+const LOADED_LANGUAGE_CODES = ['fr', 'en'] as const;
+type LoadedLanguage = typeof LOADED_LANGUAGE_CODES[number];
+const DEFAULT_LANGUAGE: LoadedLanguage = 'en';
+const LOADED_LANG_CODES = new Set<SupportedLanguage>(LOADED_LANGUAGE_CODES);
 export const AVAILABLE_LANGUAGES = SUPPORTED_LANGUAGES.filter(l => LOADED_LANG_CODES.has(l.code));
-
-const ALL_LANG_CODES = SUPPORTED_LANGUAGES.map(l => l.code) as unknown as string[];
 
 // Map i18n language codes to TMDB API language codes
 const TMDB_LANGUAGE_MAP: Record<string, string> = {
@@ -50,13 +51,27 @@ const TMDB_LANGUAGE_MAP: Record<string, string> = {
 
 /** Returns the current TMDB language code (e.g. 'fr-FR') based on the active i18n language */
 export const getTmdbLanguage = (): string => {
-  return TMDB_LANGUAGE_MAP[i18n.language] || 'fr-FR';
+  return TMDB_LANGUAGE_MAP[getResolvedAppLanguage()] || TMDB_LANGUAGE_MAP[DEFAULT_LANGUAGE];
 };
 
+const normalizeLanguageCode = (lang?: string | null): string =>
+  String(lang || '').split('-')[0].toLowerCase();
+
+const resolveLoadedLanguage = (lang?: string | null): LoadedLanguage => {
+  const normalizedLanguage = normalizeLanguageCode(lang);
+  return LOADED_LANG_CODES.has(normalizedLanguage as SupportedLanguage)
+    ? normalizedLanguage as LoadedLanguage
+    : DEFAULT_LANGUAGE;
+};
+
+export const getResolvedAppLanguage = (): LoadedLanguage =>
+  resolveLoadedLanguage(i18n.resolvedLanguage || i18n.language || getStoredLanguage());
+
 // Retrieve stored language from localStorage (set by user in settings or loaded from server)
-const getStoredLanguage = (): string | null => {
+const getStoredLanguage = (): LoadedLanguage | null => {
   try {
-    return localStorage.getItem('user_language');
+    const storedLanguage = localStorage.getItem('user_language');
+    return storedLanguage ? resolveLoadedLanguage(storedLanguage) : null;
   } catch {
     return null;
   }
@@ -71,8 +86,10 @@ i18n
       en: { translation: en },
     },
     lng: getStoredLanguage() || undefined, // Use stored language if available
-    fallbackLng: 'en',
-    supportedLngs: ALL_LANG_CODES,
+    fallbackLng: DEFAULT_LANGUAGE,
+    supportedLngs: [...LOADED_LANGUAGE_CODES],
+    load: 'languageOnly',
+    cleanCode: true,
     interpolation: {
       escapeValue: false, // React already escapes
     },
@@ -85,9 +102,10 @@ i18n
 
 // Helper to change language and persist locally
 export const changeLanguage = async (lang: SupportedLanguage): Promise<void> => {
-  await i18n.changeLanguage(lang);
+  const resolvedLanguage = resolveLoadedLanguage(lang);
+  await i18n.changeLanguage(resolvedLanguage);
   try {
-    localStorage.setItem('user_language', lang);
+    localStorage.setItem('user_language', resolvedLanguage);
   } catch {
     // Ignore storage errors
   }
@@ -117,14 +135,20 @@ const COUNTRY_TO_LANG: Record<string, string> = {
  * Only runs when no language has been stored yet (i.e., first visit).
  */
 export const detectInitialLanguage = async (): Promise<void> => {
-  if (localStorage.getItem('user_language')) return; // Already set by user or previous session
+  const storedLanguage = localStorage.getItem('user_language');
+  if (storedLanguage) {
+    const resolvedStoredLanguage = resolveLoadedLanguage(storedLanguage);
+    if (storedLanguage !== resolvedStoredLanguage || getResolvedAppLanguage() !== resolvedStoredLanguage) {
+      await changeLanguage(resolvedStoredLanguage);
+    }
+    return;
+  }
 
   // 1. Try browser language
   const rawBrowserLang = navigator.language || navigator.languages?.[0] || '';
-  const browserLang = rawBrowserLang.split('-')[0].toLowerCase();
-  if (browserLang && ALL_LANG_CODES.includes(browserLang)) {
-    await i18n.changeLanguage(browserLang);
-    localStorage.setItem('user_language', browserLang);
+  const browserLang = normalizeLanguageCode(rawBrowserLang);
+  if (browserLang && LOADED_LANG_CODES.has(browserLang as SupportedLanguage)) {
+    await changeLanguage(browserLang as SupportedLanguage);
     return;
   }
 
@@ -137,9 +161,8 @@ export const detectInitialLanguage = async (): Promise<void> => {
     if (res.ok) {
       const data = await res.json();
       const countryLang = COUNTRY_TO_LANG[data.country_code as string];
-      if (countryLang && ALL_LANG_CODES.includes(countryLang)) {
-        await i18n.changeLanguage(countryLang);
-        localStorage.setItem('user_language', countryLang);
+      if (countryLang && LOADED_LANG_CODES.has(countryLang as SupportedLanguage)) {
+        await changeLanguage(countryLang as SupportedLanguage);
         return;
       }
     }
@@ -148,8 +171,7 @@ export const detectInitialLanguage = async (): Promise<void> => {
   }
 
   // 3. Fallback to English
-  await i18n.changeLanguage('en');
-  localStorage.setItem('user_language', 'en');
+  await changeLanguage(DEFAULT_LANGUAGE);
 };
 
 export default i18n;

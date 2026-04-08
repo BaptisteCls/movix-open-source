@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { motion, AnimatePresence } from 'framer-motion';
-import { LogOut, User, List, Star, Check, ChevronDown, Crown, Settings } from 'lucide-react';
+import { LogOut, User, List, Star, Check, ChevronDown, Crown, Settings, Shield } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { googleAuth } from '../services/googleAuth';
 import { discordAuth } from '../services/discordAuth';
@@ -9,12 +9,14 @@ import { useVipModal } from '../context/VipModalContext';
 import ProfileSwitcher from './ProfileSwitcher';
 import { isUserVip } from '../utils/authUtils';
 import { useProfile } from '../context/ProfileContext';
+import { broadcastAuthChange, clearStoredAuthSession } from '../utils/accountAuth';
 
 const ProfileMenu: React.FC = () => {
   const { t } = useTranslation();
   const [isOpen, setIsOpen] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isVip, setIsVip] = useState(false);
+  const [canAccessAdminPanel, setCanAccessAdminPanel] = useState(false);
 
   // Use profile context for display data
   let currentProfile = null;
@@ -60,6 +62,42 @@ const ProfileMenu: React.FC = () => {
     };
   }, []);
 
+  useEffect(() => {
+    const checkAdminAccess = async () => {
+      if (!isAuthenticated) {
+        setCanAccessAdminPanel(false);
+        return;
+      }
+
+      const authToken = localStorage.getItem('auth_token');
+      if (!authToken) {
+        setCanAccessAdminPanel(false);
+        return;
+      }
+
+      try {
+        const response = await fetch(`${import.meta.env.VITE_MAIN_API}/api/admin/check`, {
+          headers: {
+            'Authorization': `Bearer ${authToken}`
+          }
+        });
+
+        if (!response.ok) {
+          setCanAccessAdminPanel(false);
+          return;
+        }
+
+        const data = await response.json();
+        const role = String(data?.admin?.role || '').toLowerCase();
+        setCanAccessAdminPanel(role === 'admin' || role === 'uploader');
+      } catch {
+        setCanAccessAdminPanel(false);
+      }
+    };
+
+    checkAdminAccess();
+  }, [isAuthenticated]);
+
   const handleLogout = async () => {
     const sessionId = localStorage.getItem('session_id');
     const token = localStorage.getItem('auth_token');
@@ -80,7 +118,10 @@ const ProfileMenu: React.FC = () => {
       console.error('Erreur suppression de la session lors de la déconnexion:', err);
     }
 
-    try { localStorage.clear(); } catch {}
+    try {
+      clearStoredAuthSession();
+      broadcastAuthChange();
+    } catch {}
     setIsAuthenticated(false);
     setIsOpen(false);
     // Redirection simple (pas besoin de reload explicite)
@@ -197,7 +238,8 @@ const ProfileMenu: React.FC = () => {
                     <div className="px-5 py-3 border-b border-gray-700/30">
                       <ProfileSwitcher />
                     </div>
-                    
+
+                    <div className="max-h-64 overflow-y-auto">
                     <Link 
                       to="/profile"
                       className="flex items-center gap-3 px-5 py-3 max-md:py-4 hover:bg-gray-700/50 transition-colors cursor-pointer"
@@ -238,9 +280,21 @@ const ProfileMenu: React.FC = () => {
                       <Settings className="w-4 h-4 md:w-4 md:h-4 max-md:w-5 max-md:h-5 text-gray-400" />
                       <span className="max-md:text-base">{t('settings.title')}</span>
                     </Link>
+                    </div>
                   </div>
                   
                   <div className="px-4 py-3 border-t border-gray-700/50 space-y-3">
+                    {canAccessAdminPanel && (
+                      <Link
+                        to="/admin"
+                        className="flex items-center justify-center gap-2 w-full px-3 py-3 max-md:py-4 bg-gradient-to-r from-amber-500/90 to-red-600/90 hover:from-amber-500 hover:to-red-600 text-white rounded-lg transition-colors shadow-md"
+                        onClick={() => setIsOpen(false)}
+                      >
+                        <Shield className="w-4 h-4 md:w-4 md:h-4 max-md:w-5 max-md:h-5" />
+                        <span className="font-medium max-md:text-base">{t('admin.adminPanel')}</span>
+                      </Link>
+                    )}
+
                     {/* Bouton VIP */}
                     <motion.div
                       whileHover={isVip ? undefined : { scale: 1.02 }}

@@ -649,6 +649,65 @@ const { redis } = require('../config/redis');
 const { acquireRedisLock } = require('./redisLock');
 
 const PROXY_ROTATION_REDIS_PREFIX = 'proxyscrape:rotation:v1';
+const PROXY_RATE_LIMIT_REDIS_PREFIX = 'proxyscrape:rate-limit:v1';
+const proxyRateLimitState = new Map();
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function buildProxyRateLimitKey(poolName, proxy) {
+  if (!proxy || !proxy.host || !proxy.port) return null;
+  return `${PROXY_RATE_LIMIT_REDIS_PREFIX}:${poolName}:${proxy.type || 'proxy'}:${proxy.host}:${proxy.port}:${proxy.auth || ''}`;
+}
+
+function reserveLocalRateLimitedProxy(proxyKey, minIntervalMs) {
+  if (!proxyKey) return false;
+
+  const now = Date.now();
+  const nextAllowedAt = proxyRateLimitState.get(proxyKey) || 0;
+  if (nextAllowedAt > now) {
+    return false;
+  }
+
+  proxyRateLimitState.set(proxyKey, now + minIntervalMs);
+  return true;
+}
+
+async function reserveRateLimitedProxy(poolName, proxy, minIntervalMs) {
+  if (!proxy) return false;
+
+  const safeIntervalMs = Math.max(0, Math.floor(Number(minIntervalMs) || 0));
+  if (safeIntervalMs <= 0) {
+    return true;
+  }
+
+  const proxyKey = buildProxyRateLimitKey(poolName, proxy);
+  if (!proxyKey) {
+    return false;
+  }
+
+  try {
+    const reserved = await redis.set(proxyKey, String(Date.now()), 'PX', safeIntervalMs, 'NX');
+    if (reserved === 'OK') {
+      return true;
+    }
+    return false;
+  } catch {
+    // Fallback local si Redis n'est pas disponible.
+  }
+
+  return reserveLocalRateLimitedProxy(proxyKey, safeIntervalMs);
+}
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [proxyKey, nextAllowedAt] of proxyRateLimitState) {
+    if (!Number.isFinite(nextAllowedAt) || nextAllowedAt <= now) {
+      proxyRateLimitState.delete(proxyKey);
+    }
+  }
+}, 30 * 1000).unref();
 
 function reserveLocalProxyWindow(poolName, poolLength, batchSize) {
   const existingCursor = proxyRotationState.get(poolName);
@@ -699,8 +758,51 @@ async function pickNextProxyBatch(pool, count = 1, poolName = 'default') {
   return selected;
 }
 
-async function pickNextSocks5Proxy() {
-  const [proxy] = await pickNextProxyBatch(PROXIES, 1, 'SOCKS5_PROXIES');
+async function pickNextRateLimitedProxy(pool, options = {}) {
+  if (!Array.isArray(pool) || pool.length === 0) {
+    return null;
+  }
+
+  const {
+    poolName = 'default',
+    minIntervalMs = 0,
+    waitTimeoutMs = 0,
+    retryDelayMs = 25
+  } = options;
+
+  const safeMinIntervalMs = Math.max(0, Math.floor(Number(minIntervalMs) || 0));
+  if (safeMinIntervalMs <= 0) {
+    const [proxy] = await pickNextProxyBatch(pool, 1, poolName);
+    return proxy || null;
+  }
+
+  const deadline = Date.now() + Math.max(0, Math.floor(Number(waitTimeoutMs) || 0));
+
+  while (true) {
+    const startIndex = await reserveProxyWindow(poolName, pool.length, 1);
+
+    for (let offset = 0; offset < pool.length; offset++) {
+      const proxy = pool[(startIndex + offset) % pool.length];
+      const reserved = await reserveRateLimitedProxy(poolName, proxy, safeMinIntervalMs);
+      if (reserved) {
+        return proxy;
+      }
+    }
+
+    if (Date.now() >= deadline) {
+      return null;
+    }
+
+    const remainingMs = deadline - Date.now();
+    await sleep(Math.max(5, Math.min(retryDelayMs, remainingMs)));
+  }
+}
+
+async function pickNextSocks5Proxy(options = {}) {
+  const proxy = await pickNextRateLimitedProxy(PROXIES, {
+    poolName: 'SOCKS5_PROXIES',
+    ...options
+  });
   return proxy || null;
 }
 

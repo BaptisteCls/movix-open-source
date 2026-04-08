@@ -1829,14 +1829,14 @@ const HLSPlayer = forwardRef<HLSPlayerRef, HLSPlayerProps>(({
           type: 'frembed',
           id: 'frembed_main',
           label: t('watch.frembedPlayer'),
-          url: `https://frembed.bond/api/film.php?id=${movieId}`,
+          url: `https://frembed.help/api/film.php?id=${movieId}`,
         });
       } else if (tvShowId && seasonNumber && episodeNumber) {
         embedSources.push({
           type: 'frembed',
           id: 'frembed_main',
           label: t('watch.frembedPlayer'),
-          url: `https://frembed.bond/api/serie.php?id=${tvShowId}&sa=${seasonNumber}&epi=${episodeNumber}`,
+          url: `https://frembed.help/api/serie.php?id=${tvShowId}&sa=${seasonNumber}&epi=${episodeNumber}`,
         });
       }
     }

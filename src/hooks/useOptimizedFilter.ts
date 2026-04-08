@@ -1,13 +1,14 @@
 import { useState, useMemo, useCallback, useEffect, useDeferredValue } from 'react';
-import { FilterOptions } from '../components/FilterSystem';
+import { FilterOptions, type FilterItemType } from '../components/FilterSystem';
 
 interface WatchItem {
-  id: number;
-  type: 'movie' | 'tv' | 'collection';
+  id: number | string;
+  type: Exclude<FilterItemType, 'all'>;
   title: string;
   name?: string;
   poster_path: string;
   addedAt: string;
+  searchText?: string;
   episodeInfo?: {
     season: number;
     episode: number;
@@ -24,6 +25,7 @@ interface UseOptimizedFilterProps {
 interface IndexedItem {
   item: WatchItem;
   normalizedTitle: string;
+  normalizedSearchText: string;
   addedAtMs: number;
   addedAtDayMs: number;
 }
@@ -86,6 +88,7 @@ export const useOptimizedFilter = ({ items, initialFilters }: UseOptimizedFilter
       return {
         item,
         normalizedTitle: (item.title || item.name || '').toLowerCase(),
+        normalizedSearchText: (item.searchText || item.title || item.name || '').toLowerCase(),
         addedAtMs,
         addedAtDayMs
       };
@@ -98,13 +101,13 @@ export const useOptimizedFilter = ({ items, initialFilters }: UseOptimizedFilter
 
   const filteredItems = useMemo(() => {
     let result = indexedItems.filter((indexedItem) => {
-      const { item, normalizedTitle, addedAtDayMs } = indexedItem;
+      const { item, normalizedSearchText, addedAtDayMs } = indexedItem;
 
       if (filters.typeFilter !== 'all' && item.type !== filters.typeFilter) {
         return false;
       }
 
-      if (normalizedSearchTerm && !normalizedTitle.includes(normalizedSearchTerm)) {
+      if (normalizedSearchTerm && !normalizedSearchText.includes(normalizedSearchTerm)) {
         return false;
       }
 
@@ -156,7 +159,9 @@ export const useOptimizedFilter = ({ items, initialFilters }: UseOptimizedFilter
         all: items.length,
         movie: 0,
         tv: 0,
-        collection: 0
+        collection: 0,
+        'shared-list': 0,
+        'live-tv': 0
       }
     );
   }, [items]);

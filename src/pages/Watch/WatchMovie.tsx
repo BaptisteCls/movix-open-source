@@ -252,7 +252,7 @@ const checkMovieAvailability = async (movieId: string) => {
 
     // Check Frembed availability
     try {
-      const frembedResponse = await axios.get(`https://frembed.bond/api/public/v1/movies/${movieId}`, { timeout: 1000 });
+      const frembedResponse = await axios.get(`https://frembed.help/api/public/v1/movies/${movieId}`, { timeout: 1000 });
       console.log(`Checking Frembed for ID ${movieId}:`, frembedResponse.data);
       const isFrembedAvailable = frembedResponse.data.status === 200 && frembedResponse.data.result?.totalItems > 0;
 
@@ -2024,8 +2024,8 @@ const WatchMovie: React.FC = () => {
           }
           else if (isFrembedAvailable) {
             setSelectedSource('frembed');
-            setVideoSource(`https://frembed.bond/api/film.php?id=${id}`);
-            setEmbedUrl(`https://frembed.bond/api/film.php?id=${id}`);
+            setVideoSource(`https://frembed.help/api/film.php?id=${id}`);
+            setEmbedUrl(`https://frembed.help/api/film.php?id=${id}`);
             setEmbedType('frembed');
             currentSourceRef.current = 'frembed';
           } else if (customLinks.length > 0) {
@@ -3033,8 +3033,8 @@ const WatchMovie: React.FC = () => {
                       setEmbedType('coflix');
                     } else if (frembedAvailable) {
                       setSelectedSource('frembed');
-                      setVideoSource(`https://frembed.bond/api/film.php?id=${id}`);
-                      setEmbedUrl(`https://frembed.bond/api/film.php?id=${id}`);
+                      setVideoSource(`https://frembed.help/api/film.php?id=${id}`);
+                      setEmbedUrl(`https://frembed.help/api/film.php?id=${id}`);
                       setEmbedType('frembed');
                     } else if (customSources.length > 0) {
                       setSelectedSource('custom');
@@ -3814,7 +3814,7 @@ const WatchMovie: React.FC = () => {
           <div className="fixed top-6 right-8 z-[10000] flex items-center gap-2">
             {/* Bouton Ouvrir dans une nouvelle page */}
             <button
-              onClick={() => window.open(selectedSource === 'vostfr' ? `https://player.videasy.net/movie/${id}` : `https://frembed.bond/api/film.php?id=${id}`, '_blank', 'noopener,noreferrer')}
+              onClick={() => window.open(selectedSource === 'vostfr' ? `https://player.videasy.net/movie/${id}` : `https://frembed.help/api/film.php?id=${id}`, '_blank', 'noopener,noreferrer')}
               className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-800/90 backdrop-blur-sm border border-gray-600 hover:bg-gray-700/90 text-white font-medium text-sm transition-all duration-200"
               title={t('watch.openInNewPage')}
             >
@@ -3834,7 +3834,7 @@ const WatchMovie: React.FC = () => {
           </div>
 
           <iframe
-            src={selectedSource === 'vostfr' ? `https://player.videasy.net/movie/${id}` : `https://frembed.bond/api/film.php?id=${id}`}
+            src={selectedSource === 'vostfr' ? `https://player.videasy.net/movie/${id}` : `https://frembed.help/api/film.php?id=${id}`}
             className="w-full h-full border-0"
             allowFullScreen
             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"

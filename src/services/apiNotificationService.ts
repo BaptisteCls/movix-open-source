@@ -220,10 +220,10 @@ export async function markAllNotificationsAsRead(): Promise<boolean> {
  * Note: On passe directement les données de notification pour éviter une requête supplémentaire
  */
 export function getContentDetailsFromNotification(apiNotification?: ApiNotification): { contentId: string, contentType: 'movie' | 'tv' } | null {
-  if (apiNotification) {
+  if (apiNotification && (apiNotification.content_type === 'movie' || apiNotification.content_type === 'tv')) {
     return {
       contentId: apiNotification.content_id,
-      contentType: apiNotification.content_type === 'movie' ? 'movie' : 'tv'
+      contentType: apiNotification.content_type
     };
   }
   return null;

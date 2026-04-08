@@ -593,7 +593,7 @@ const AdminWishboard: React.FC = () => {
 
         // Check Frembed
         try {
-            const response = await axios.get(`https://frembed.bond/api/public/v1/movies/${tmdbId}`, { timeout: 3000 });
+            const response = await axios.get(`https://frembed.help/api/public/v1/movies/${tmdbId}`, { timeout: 3000 });
             const isAvailable = response.data?.status === 200 && !!response.data?.result;
             results.push({ name: 'Frembed', available: isAvailable });
         } catch {
@@ -706,7 +706,7 @@ const AdminWishboard: React.FC = () => {
 
         // Check Frembed
         try {
-            const response = await axios.get(`https://frembed.bond/api/public/v1/tv/${tmdbId}?sa=${season}&epi=${episode}`, { timeout: 3000 });
+            const response = await axios.get(`https://frembed.help/api/public/v1/tv/${tmdbId}?sa=${season}&epi=${episode}`, { timeout: 3000 });
             const isAvailable = response.data?.status === 200 && !!response.data?.result;
             results.push({ name: 'Frembed', available: isAvailable });
         } catch {

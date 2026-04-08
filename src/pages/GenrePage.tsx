@@ -43,6 +43,36 @@ const GENRES: Record<number, string> = {
   10768: 'Guerre & Politique'
 };
 
+const GENRE_TRANSLATION_KEYS: Record<number, string> = {
+  28: 'genres.id_28',
+  12: 'genres.id_12',
+  16: 'genres.id_16',
+  35: 'genres.id_35',
+  80: 'genres.id_80',
+  99: 'genres.id_99',
+  18: 'genres.id_18',
+  10751: 'genres.id_10751',
+  14: 'genres.id_14',
+  36: 'genres.id_36',
+  27: 'genres.id_27',
+  10402: 'genres.id_10402',
+  9648: 'genres.id_9648',
+  10749: 'genres.id_10749',
+  878: 'genres.id_878',
+  10770: 'genres.id_10770',
+  53: 'genres.id_53',
+  10752: 'genres.id_10752',
+  37: 'genres.id_37',
+  10759: 'genres.id_10759',
+  10762: 'genres.id_10762',
+  10763: 'genres.id_10763',
+  10764: 'genres.id_10764',
+  10765: 'genres.id_10765',
+  10766: 'genres.id_10766',
+  10767: 'genres.id_10767',
+  10768: 'genres.id_10768'
+};
+
 type ViewType = 'grid' | 'list';
 
 interface ContentItem {
@@ -144,8 +174,21 @@ const GenrePage: React.FC = () => {
     }
   };
 
-  const genreName = genreId ? GENRES[parseInt(genreId)] || 'Genre' : 'Genre';
+  const parsedGenreId = genreId ? parseInt(genreId, 10) : NaN;
   const isMovie = mediaType === 'movie';
+  const isAnime = mediaType === 'anime';
+  const resolvedMediaType = isAnime ? 'tv' : mediaType;
+  const genreTranslationKey = Number.isFinite(parsedGenreId) ? GENRE_TRANSLATION_KEYS[parsedGenreId] : '';
+  const genreName = genreTranslationKey
+    ? t(genreTranslationKey)
+    : genreId
+      ? GENRES[parsedGenreId] || t('filter.genre')
+      : t('filter.genre');
+  const contentTypeLabel = isMovie
+    ? t('filter.movies')
+    : isAnime
+      ? t('filter.anime')
+      : t('filter.series');
 
   // Sort options for dropdown
   const sortOptions = [
@@ -177,16 +220,19 @@ const GenrePage: React.FC = () => {
       if (!genreId || !mediaType) return;
       setLoading(true);
       try {
-        const response = await axios.get(`https://api.themoviedb.org/3/discover/${mediaType}`, {
+        const withGenres = isAnime && genreId !== '16' ? `16,${genreId}` : genreId;
+
+        const response = await axios.get(`https://api.themoviedb.org/3/discover/${resolvedMediaType}`, {
           params: {
             api_key: TMDB_API_KEY,
             language: getTmdbLanguage(),
-            with_genres: genreId,
+            with_genres: withGenres,
             page: currentPage,
             sort_by: sortBy,
             include_adult: false,
             'vote_count.gte': 5,
-            include_video: false
+            include_video: false,
+            ...(isAnime ? { with_origin_country: 'JP' } : {})
           }
         });
         const filtered = response.data.results.filter(
@@ -202,7 +248,7 @@ const GenrePage: React.FC = () => {
       }
     };
     fetchContent();
-  }, [genreId, mediaType, currentPage, sortBy]);
+  }, [genreId, mediaType, currentPage, sortBy, isAnime, resolvedMediaType, t]);
 
   const handlePageChange = useCallback((newPage: number) => {
     if (newPage > 0 && newPage <= totalPages) {
@@ -221,7 +267,7 @@ const GenrePage: React.FC = () => {
     id: item.id,
     title: item.title,
     name: item.name,
-    media_type: mediaType as 'movie' | 'tv',
+    media_type: resolvedMediaType as 'movie' | 'tv',
     poster_path: item.poster_path,
     backdrop_path: item.backdrop_path,
     release_date: item.release_date,
@@ -272,8 +318,8 @@ const GenrePage: React.FC = () => {
         transition={{ duration: 0.3 }}
       >
         <SEO
-          title={t('genres.seoTitle', { genre: genreName, type: isMovie ? t('filter.movies') : t('filter.series') })}
-          description={t('genres.seoDescription', { genre: genreName, type: isMovie ? t('filter.movies').toLowerCase() : t('filter.series').toLowerCase() })}
+          title={t('genres.seoTitle', { genre: genreName, type: contentTypeLabel })}
+          description={t('genres.seoDescription', { genre: genreName, type: contentTypeLabel.toLowerCase() })}
         />
 
         <div className="max-w-screen-xl mx-auto">
@@ -297,7 +343,7 @@ const GenrePage: React.FC = () => {
                   <ShinyText text={genreName} speed={4} />
                 </h1>
                 <span className="px-3 py-1 rounded-full bg-white/5 border border-white/10 text-sm text-white/60">
-                  {isMovie ? t('filter.movies') : t('filter.series')}
+                  {contentTypeLabel}
                 </span>
               </div>
             </div>
@@ -414,7 +460,7 @@ const GenrePage: React.FC = () => {
                       item={toSearchResult(item)}
                       index={index}
                       movieLabel={t('filter.movies')}
-                      serieLabel={t('filter.series')}
+                      serieLabel={contentTypeLabel}
                     />
                   ))}
                 </div>
@@ -429,8 +475,8 @@ const GenrePage: React.FC = () => {
                       item={toSearchResult(item)}
                       index={index}
                       movieLabel={t('filter.movies')}
-                      serieLabel={t('filter.series')}
-                      watchlistLabel="Watchlist"
+                      serieLabel={contentTypeLabel}
+                      watchlistLabel={t('profile.addToWatchlist')}
                       removeLabel={t('genres.remove')}
                       noDescLabel={t('genres.noContent')}
                     />

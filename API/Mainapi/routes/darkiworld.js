@@ -515,6 +515,8 @@ router.get('/decode/:id', async (req, res) => {
 
       while (retryCount < maxRetries) {
         try {
+          await refreshDarkinoSessionIfNeeded();
+
           const linkResp = await axiosDarkinoRequest({
             method: 'post',
             url: `/api/v1/liens/${id}/download`,

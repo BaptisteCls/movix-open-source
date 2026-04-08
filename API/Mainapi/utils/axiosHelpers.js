@@ -54,7 +54,7 @@ let deps = {
   incrementFstreamRequestCounter: () => {}
 };
 
-const WIFLIX_BASE_URL = 'https://flemmix.golf';
+const WIFLIX_BASE_URL = 'https://flemmix.farm';
 
 const truncateForLog = (value, maxLength = 300) => {
   if (typeof value !== 'string') return value;
@@ -114,7 +114,7 @@ function generateDarkiReferer(url) {
     const match = url.match(/\/titles\/(\d+)\/season\/(\d+)\/episode\/(\d+)\/download/);
     if (match) {
       const [, titleId, seasonId, episodeId] = match;
-      return `${baseUrl}/titles/${titleId}/season/${seasonId}/episode/${episodeId}/download?filters=W3sia2V5IjoiaWRfaG9zdCIsInZhbHVlIjoyLCJpc0luYWN0aXZlIjpmYWxzZSwidmFsdWVLZXkiOjJ9XQ%3D%3D`;
+      return `${baseUrl}/titles/${titleId}/season/${seasonId}/episode/${episodeId}/download`;
     }
   } else if (url.includes('/titles/') && url.includes('/download')) {
     // Pour les films: /titles/{id}/download
@@ -132,6 +132,104 @@ function generateDarkiReferer(url) {
   return baseUrl;
 }
 
+function splitCookieHeader(headerValue) {
+  if (typeof headerValue !== 'string' || headerValue.trim() === '') {
+    return [];
+  }
+
+  return headerValue
+    .split(';')
+    .map(part => part.trim())
+    .filter(Boolean)
+    .map(part => {
+      const separatorIndex = part.indexOf('=');
+      if (separatorIndex <= 0) {
+        return null;
+      }
+
+      return [
+        part.slice(0, separatorIndex).trim(),
+        part.slice(separatorIndex + 1).trim()
+      ];
+    })
+    .filter(Boolean);
+}
+
+function mergeCookieHeaders(...headerValues) {
+  const cookieMap = new Map();
+
+  for (const headerValue of headerValues) {
+    for (const [name, value] of splitCookieHeader(headerValue)) {
+      cookieMap.set(name, value);
+    }
+  }
+
+  return [...cookieMap.entries()]
+    .map(([name, value]) => `${name}=${value}`)
+    .join('; ');
+}
+
+function decodeCookieValue(value) {
+  if (typeof value !== 'string' || value === '') {
+    return '';
+  }
+
+  try {
+    return decodeURIComponent(value);
+  } catch (_) {
+    return value;
+  }
+}
+
+async function getDarkinoJarState() {
+  if (!deps.cookieJar) {
+    return {
+      cookieHeader: '',
+      xsrfToken: ''
+    };
+  }
+
+  try {
+    const cookies = await deps.cookieJar.getCookies(DARKIWORLD_BASE_URL);
+    const xsrfCookie = cookies.find(cookie => cookie.key.toUpperCase() === 'XSRF-TOKEN');
+
+    return {
+      cookieHeader: cookies.map(cookie => cookie.cookieString()).join('; '),
+      xsrfToken: xsrfCookie ? decodeCookieValue(xsrfCookie.value) : ''
+    };
+  } catch (error) {
+    console.warn(`[DARKINO REQUEST] Impossible de lire le cookieJar: ${error.message}`);
+    return {
+      cookieHeader: '',
+      xsrfToken: ''
+    };
+  }
+}
+
+async function buildDarkinoRequestHeaders(config) {
+  const dynamicReferer = generateDarkiReferer(config.url || '/');
+  const jarState = await getDarkinoJarState();
+  const requestHeaders = {
+    ...deps.darkiHeaders,
+    referer: dynamicReferer,
+    ...config.headers,
+  };
+  const configuredCookieHeader = requestHeaders.cookie || requestHeaders.Cookie || '';
+  const mergedCookieHeader = mergeCookieHeaders(configuredCookieHeader, jarState.cookieHeader);
+
+  if (mergedCookieHeader) {
+    requestHeaders.cookie = mergedCookieHeader;
+  }
+
+  delete requestHeaders.Cookie;
+
+  if (jarState.xsrfToken) {
+    requestHeaders['x-xsrf-token'] = jarState.xsrfToken;
+  }
+
+  return requestHeaders;
+}
+
 // Fonction utilitaire pour requ\u00eates Darkino avec proxies (SOCKS5h)
 async function axiosDarkinoRequest(config) {
   // V\u00e9rifier si on est en cooldown apr\u00e8s une erreur 403
@@ -145,16 +243,7 @@ async function axiosDarkinoRequest(config) {
   }
 
   const requestUrl = `${DARKIWORLD_BASE_URL}${config.url}`;
-
-  // G\u00e9n\u00e9rer le referer dynamiquement selon l'URL
-  const dynamicReferer = generateDarkiReferer(config.url);
-
-  // Headers pour les requ\u00eates Darkino
-  const darkinoRequestHeaders = {
-    ...deps.darkiHeaders,
-    'referer': dynamicReferer,
-    ...config.headers,
-  };
+  const darkinoRequestHeaders = await buildDarkinoRequestHeaders(config);
 
   if (!ENABLE_DARKINO_PROXY) {
     // Si le proxy est d\u00e9sactiv\u00e9, faire la requ\u00eate directe
@@ -429,16 +518,49 @@ async function axiosFStreamRequest(config) {
   }
 }
 
-// Fonction utilitaire pour requ\u00eates AnimeSama via BYPASS403 + ProxyScrape
+function isAnimeSamaRetriableError(error) {
+  const statusCode = error?.response?.status;
+  const errorCode = error?.code;
+  const message = String(error?.message || '').toLowerCase();
+
+  if (statusCode === 403 || statusCode === 407 || statusCode === 408 || statusCode === 425 || statusCode === 429) {
+    return true;
+  }
+
+  if (statusCode >= 500 && statusCode < 600) {
+    return true;
+  }
+
+  if (
+    errorCode === 'ECONNABORTED' ||
+    errorCode === 'ETIMEDOUT' ||
+    errorCode === 'ECONNRESET' ||
+    errorCode === 'ECONNREFUSED' ||
+    errorCode === 'EHOSTUNREACH' ||
+    errorCode === 'ENETUNREACH' ||
+    errorCode === 'EAI_AGAIN'
+  ) {
+    return true;
+  }
+
+  return (
+    message.includes('socks5 authentication failed') ||
+    message.includes('proxy authentication') ||
+    message.includes('tunneling socket could not be established')
+  );
+}
+
+// Fonction utilitaire pour requ\u00eates AnimeSama avec fallback proxy -> direct -> bypass
 async function axiosAnimeSamaRequest(config) {
   const MAX_ANIMESAMA_PROXY_ATTEMPTS = 2;
+  const debugAnimeSama = process.env.DEBUG_ANIMESAMA === 'true';
   let urlStr = config.url || '';
 
   const isAnimeSama = urlStr.includes('anime-sama.to') || urlStr.includes('anime-sama.si') || urlStr.includes('anime-sama.fr') ||
     (config.baseURL && (config.baseURL.includes('anime-sama.to') || config.baseURL.includes('anime-sama.si') || config.baseURL.includes('anime-sama.fr')));
 
   if (!ENABLE_ANIME_PROXY || !isAnimeSama) {
-    return deps.axiosAnimeSama({ ...config, timeout: 30000 });
+    return deps.axiosAnimeSama({ ...config, timeout: 30000, proxy: false });
   }
 
   // Construire l'URL compl\u00e8te
@@ -484,6 +606,14 @@ async function axiosAnimeSamaRequest(config) {
     Object.assign(cleanHeaders, configHeaders);
   }
 
+  const baseRequestConfig = {
+    ...config,
+    headers: cleanHeaders,
+    timeout: 30000,
+    decompress: true,
+    proxy: false
+  };
+
   const proxyscrapePool = [
     ...PROXIES.map(proxy => ({ proxy, type: 'socks5' })),
     ...HTTP_PROXIES.map(proxy => ({ proxy, type: 'http' }))
@@ -491,57 +621,57 @@ async function axiosAnimeSamaRequest(config) {
     .sort(() => Math.random() - 0.5)
     .slice(0, MAX_ANIMESAMA_PROXY_ATTEMPTS);
 
-  if (proxyscrapePool.length === 0) {
-    return deps.axiosAnimeSama({
-      ...config,
-      url: requestUrl,
-      headers: cleanHeaders,
-      timeout: 30000,
-      decompress: true
-    });
+  const proxiedTargetUrl = requestUrl || absoluteUrl;
+  const directTargets = [absoluteUrl];
+  if (requestUrl !== absoluteUrl) {
+    directTargets.push(requestUrl);
   }
 
   let lastError = null;
 
-  // Essayer quelques proxies ProxyScrape vers le serveur BYPASS403
+  // 1. Tenter d'abord via pool de proxies externes.
   for (let i = 0; i < proxyscrapePool.length; i++) {
     const entry = proxyscrapePool[i];
     const agents = getDarkinoHttpProxyAgent(entry.proxy);
     const proxyLabel = `${entry.type}:${entry.proxy.host}:${entry.proxy.port}`;
 
     try {
-      const response = await deps.axiosAnimeSama({
-        ...config,
-        url: requestUrl,
-        headers: cleanHeaders,
-        timeout: 30000,
-        decompress: true,
+      return await deps.axiosAnimeSama({
+        ...baseRequestConfig,
+        url: proxiedTargetUrl,
         httpAgent: agents.httpAgent,
-        httpsAgent: agents.httpsAgent,
-        proxy: false
+        httpsAgent: agents.httpsAgent
       });
-      return response;
     } catch (error) {
       lastError = error;
-      const statusCode = error.response?.status;
-      const errorCode = statusCode || error.code || 'unknown';
 
-      if (statusCode === 403 || statusCode === 429) {
-        console.warn(`[ANIMESAMA REQUEST] ${proxyLabel} bloque (${statusCode}), retry...`);
-        continue;
+      if (!isAnimeSamaRetriableError(error)) {
+        throw error;
       }
 
-      if (statusCode >= 500 && statusCode < 600) {
-        console.warn(`[ANIMESAMA REQUEST] ${proxyLabel} erreur ${statusCode}, retry...`);
-        continue;
+      if (debugAnimeSama) {
+        console.warn(`[ANIMESAMA REQUEST] ${proxyLabel} failed, retrying next proxy`, summarizeRequestErrorForLog(error));
+      }
+    }
+  }
+
+  // 2. Ensuite seulement, tenter sans proxy externe : direct Anime-Sama puis bypass direct si configur\u00e9.
+  for (const target of directTargets) {
+    try {
+      return await deps.axiosAnimeSama({
+        ...baseRequestConfig,
+        url: target
+      });
+    } catch (error) {
+      lastError = error;
+
+      if (!isAnimeSamaRetriableError(error)) {
+        throw error;
       }
 
-      if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') {
-        console.warn(`[ANIMESAMA REQUEST] ${proxyLabel} timeout (${errorCode}), retry...`);
-        continue;
+      if (debugAnimeSama) {
+        console.warn(`[ANIMESAMA REQUEST] direct failed for ${target}`, summarizeRequestErrorForLog(error));
       }
-
-      throw error;
     }
   }
 

@@ -1568,7 +1568,7 @@ const VideoPlayer = ({ showId, seasonNumber, episodeNumber, tvShowName, releaseY
     }
     switch (selectedSource as 'primary' | 'vostfr' | 'multi' | 'videasy' | 'vidsrccc' | 'vidsrcsu' | 'vidsrcwtf1' | 'vidsrcwtf5' | 'omega' | 'darkino' | 'mp4' | number) {
       case 'primary':
-        newSrc = `https://frembed.bond/api/serie.php?id=${showId}&sa=${seasonNumber}&epi=${episodeNumber}`;
+        newSrc = `https://frembed.help/api/serie.php?id=${showId}&sa=${seasonNumber}&epi=${episodeNumber}`;
         break;
       case 'vostfr':
         newSrc = `https://vidsrc.wtf/api/3/tv/?id=${showId}&s=${seasonNumber}&e=${episodeNumber}`;

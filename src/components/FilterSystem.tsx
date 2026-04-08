@@ -1,14 +1,16 @@
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Search, Filter, X, Film, Tv, FolderOpen, SortAsc, SortDesc, Type } from 'lucide-react';
+import { Search, Filter, X, Film, Tv, FolderOpen, SortAsc, SortDesc, Type, Monitor, Share2 } from 'lucide-react';
 import InputMask from 'react-input-mask';
 import { useTranslation } from 'react-i18next';
 import CustomDropdown from './CustomDropdown';
 import CustomDatePicker from './CustomDatePicker';
 
+export type FilterItemType = 'all' | 'movie' | 'tv' | 'collection' | 'shared-list' | 'live-tv';
+
 export interface FilterOptions {
   searchTerm: string;
-  typeFilter: 'all' | 'movie' | 'tv' | 'collection';
+  typeFilter: FilterItemType;
   sortBy: 'date' | 'name';
   sortOrder: 'asc' | 'desc';
   dateRange?: {
@@ -23,6 +25,7 @@ interface FilterSystemProps {
   filteredItems: number;
   isSorting?: boolean;
   className?: string;
+  availableTypeFilters?: FilterItemType[];
 }
 
 const FilterSystem: React.FC<FilterSystemProps> = ({
@@ -30,7 +33,8 @@ const FilterSystem: React.FC<FilterSystemProps> = ({
   totalItems,
   filteredItems,
   isSorting = false,
-  className = ''
+  className = '',
+  availableTypeFilters = ['all', 'movie', 'tv', 'collection']
 }) => {
   const { t, i18n } = useTranslation();
   const [filters, setFilters] = useState<FilterOptions>({
@@ -45,6 +49,20 @@ const FilterSystem: React.FC<FilterSystemProps> = ({
   const [isTextMode, setIsTextMode] = useState(false);
   const [textStartDate, setTextStartDate] = useState('');
   const [textEndDate, setTextEndDate] = useState('');
+
+  const typeFilterButtons = useMemo(() => ([
+    { value: 'all' as const, label: t('filter.all') },
+    { value: 'movie' as const, label: t('filter.movies'), icon: Film },
+    { value: 'tv' as const, label: t('filter.series'), icon: Tv },
+    { value: 'collection' as const, label: t('filter.collections'), icon: FolderOpen },
+    { value: 'shared-list' as const, label: t('filter.sharedLists'), icon: Share2 },
+    { value: 'live-tv' as const, label: t('filter.liveTV'), icon: Monitor },
+  ]), [t]);
+
+  const visibleTypeFilterButtons = useMemo(
+    () => typeFilterButtons.filter((button) => availableTypeFilters.includes(button.value)),
+    [availableTypeFilters, typeFilterButtons]
+  );
 
   // Fonction pour valider et parser une date au format JJ/MM/AAAA
   const parseDateFromMask = (maskedValue: string): Date | null => {
@@ -105,6 +123,17 @@ const FilterSystem: React.FC<FilterSystemProps> = ({
 
     return () => window.clearTimeout(timeout);
   }, [searchInput, applyFilterUpdate]);
+
+  useEffect(() => {
+    if (availableTypeFilters.includes(filters.typeFilter)) {
+      return;
+    }
+
+    applyFilterUpdate((prev) => ({
+      ...prev,
+      typeFilter: 'all'
+    }));
+  }, [availableTypeFilters, filters.typeFilter, applyFilterUpdate]);
 
   const handleFilterChange = useCallback((key: keyof FilterOptions, value: any) => {
     applyFilterUpdate((prev) => ({
@@ -186,49 +215,27 @@ const FilterSystem: React.FC<FilterSystemProps> = ({
 
         {/* Type Filter */}
         <div className="flex gap-2 flex-wrap">
-          <button
-            onClick={() => handleFilterChange('typeFilter', 'all')}
-            className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-              filters.typeFilter === 'all'
-                ? 'bg-blue-600 text-white'
-                : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-            }`}
-          >
-            {t('filter.all')}
-          </button>
-          <button
-            onClick={() => handleFilterChange('typeFilter', 'movie')}
-            className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-1 ${
-              filters.typeFilter === 'movie'
-                ? 'bg-blue-600 text-white'
-                : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-            }`}
-          >
-            <Film className="w-4 h-4" />
-            {t('filter.movies')}
-          </button>
-          <button
-            onClick={() => handleFilterChange('typeFilter', 'tv')}
-            className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-1 ${
-              filters.typeFilter === 'tv'
-                ? 'bg-blue-600 text-white'
-                : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-            }`}
-          >
-            <Tv className="w-4 h-4" />
-            {t('filter.series')}
-          </button>
-          <button
-            onClick={() => handleFilterChange('typeFilter', 'collection')}
-            className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-1 ${
-              filters.typeFilter === 'collection'
-                ? 'bg-blue-600 text-white'
-                : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-            }`}
-          >
-            <FolderOpen className="w-4 h-4" />
-            {t('filter.collections')}
-          </button>
+          {visibleTypeFilterButtons.map((button) => {
+            const Icon = button.icon;
+            const isActive = filters.typeFilter === button.value;
+
+            return (
+              <button
+                key={button.value}
+                onClick={() => handleFilterChange('typeFilter', button.value)}
+                className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  Icon ? 'flex items-center gap-1' : ''
+                } ${
+                  isActive
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                }`}
+              >
+                {Icon ? <Icon className="w-4 h-4" /> : null}
+                {button.label}
+              </button>
+            );
+          })}
         </div>
 
         {/* Sort Controls */}

@@ -129,11 +129,17 @@ const NotificationsPopup: React.FC<NotificationsPopupProps> = ({ onClose, onNoti
   };
 
   const handleNavigateToContent = async (notification: Notification) => {
+    const apiNotif = apiNotifications.find(n => n.id.toString() === notification.id);
+
+    if (apiNotif?.notification_type.startsWith('report')) {
+      await handleMarkAsRead(notification);
+      return;
+    }
+
     // Marquer comme lu
     await handleMarkAsRead(notification);
 
     // Récupérer les détails du contenu depuis la notification API
-    const apiNotif = apiNotifications.find(n => n.id.toString() === notification.id);
     const contentDetails = apiNotificationService.getContentDetailsFromNotification(apiNotif);
 
     if (contentDetails) {
@@ -203,6 +209,24 @@ const NotificationsPopup: React.FC<NotificationsPopupProps> = ({ onClose, onNoti
         return (
           <span>
             <span className="font-semibold">{notification.fromUsername}</span> {t('notifications.mentionedYou')}
+          </span>
+        );
+      case 'report_resolved_deleted':
+        return (
+          <span>
+            <span className="font-semibold">{notification.fromUsername}</span> {t('notifications.reportResolvedWithDeletion')}
+          </span>
+        );
+      case 'report_resolved':
+        return (
+          <span>
+            <span className="font-semibold">{notification.fromUsername}</span> {t('notifications.reportResolved')}
+          </span>
+        );
+      case 'report_dismissed':
+        return (
+          <span>
+            <span className="font-semibold">{notification.fromUsername}</span> {t('notifications.reportDismissed')}
           </span>
         );
       default:

@@ -7,7 +7,7 @@ export function securityMiddleware(req: NextApiRequest, res: NextApiResponse, ne
     "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://api.themoviedb.org; " +
     "style-src 'self' 'unsafe-inline'; " +
     "img-src 'self' https://image.tmdb.org data:; " +
-    "connect-src 'self' https://api.themoviedb.org https://frembed.bond https://discord.com;"
+    "connect-src 'self' https://api.themoviedb.org https://frembed.help https://discord.com;"
   );
 
   res.setHeader('X-Frame-Options', 'DENY');

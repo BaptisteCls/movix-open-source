@@ -203,6 +203,9 @@ const CommentsSection: React.FC<CommentsSectionProps> = ({ contentType, contentI
   const [deleteConfirm, setDeleteConfirm] = useState<{ id: number; type: 'comment' | 'reply'; commentId?: number } | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [showComments, setShowComments] = useState(false);
+  const [areCommentsHidden, setAreCommentsHidden] = useState(() => {
+    return localStorage.getItem('settings_hide_comments_section') === 'true';
+  });
   const [repliesPage, setRepliesPage] = useState<{ [key: number]: number }>({});
   const [repliesHasMore, setRepliesHasMore] = useState<{ [key: number]: boolean }>({});
 
@@ -256,6 +259,21 @@ const CommentsSection: React.FC<CommentsSectionProps> = ({ contentType, contentI
         .then(() => setIsAdmin(true))
         .catch(() => setIsAdmin(false));
     }
+  }, []);
+
+  useEffect(() => {
+    const syncCommentsVisibility = () => {
+      setAreCommentsHidden(localStorage.getItem('settings_hide_comments_section') === 'true');
+    };
+
+    syncCommentsVisibility();
+    window.addEventListener('storage', syncCommentsVisibility);
+    window.addEventListener('comments_section_visibility_changed', syncCommentsVisibility as EventListener);
+
+    return () => {
+      window.removeEventListener('storage', syncCommentsVisibility);
+      window.removeEventListener('comments_section_visibility_changed', syncCommentsVisibility as EventListener);
+    };
   }, []);
 
   // Turnstile : rendre le widget quand l'utilisateur est authentifié
@@ -997,7 +1015,9 @@ const CommentsSection: React.FC<CommentsSectionProps> = ({ contentType, contentI
 
   return (
     <>
-    <div className="w-full max-w-5xl mx-auto px-2 sm:px-4 md:px-6 py-4 sm:py-6 md:py-8">
+    <div className={`relative w-full max-w-5xl mx-auto px-2 sm:px-4 md:px-6 ${areCommentsHidden ? 'py-2 sm:py-3 md:py-4' : 'py-4 sm:py-6 md:py-8'}`}>
+      {!areCommentsHidden ? (
+      <div>
       {/* Message d'information sur les demandes d'ajouts */}
       <motion.div
         initial={{ opacity: 0, y: -10 }}
@@ -1773,6 +1793,66 @@ const CommentsSection: React.FC<CommentsSectionProps> = ({ contentType, contentI
           </div>
         )}
       </div>
+
+      </div>
+      ) : (
+        <div className="flex items-center justify-center px-1 py-2 sm:px-2 sm:py-3">
+          <motion.div
+            initial={{ opacity: 0, y: 18, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+            className="relative w-full max-w-2xl"
+          >
+            <div className="absolute left-1/2 top-1/2 h-48 w-48 -translate-x-1/2 -translate-y-1/2 rounded-full bg-blue-500/10 blur-3xl" />
+
+            <div className="relative overflow-hidden rounded-[30px] border border-white/10 bg-[linear-gradient(135deg,rgba(255,255,255,0.08),rgba(255,255,255,0.02))] p-[1px] shadow-[0_30px_90px_rgba(0,0,0,0.45)]">
+              <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(255,255,255,0.16),transparent_35%)] opacity-80" />
+
+              <div className="relative rounded-[29px] border border-white/5 bg-slate-950/92 px-6 py-7 text-center sm:px-8 sm:py-8">
+                <motion.div
+                  initial={{ scale: 0.9, opacity: 0.85 }}
+                  animate={{ scale: [0.98, 1.04, 1], opacity: 1 }}
+                  transition={{ duration: 0.55, ease: 'easeOut' }}
+                  className="relative mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl border border-blue-400/20 bg-gradient-to-br from-blue-500/12 via-slate-900/80 to-violet-500/12 shadow-[0_12px_40px_rgba(37,99,235,0.2)]"
+                >
+                  <div className="absolute inset-0 rounded-2xl bg-[radial-gradient(circle,rgba(96,165,250,0.14),transparent_60%)]" />
+                  <MessageCircle className="relative h-7 w-7 text-blue-100" />
+                </motion.div>
+
+                <div className="mb-3 inline-flex items-center rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.22em] text-blue-200/80">
+                  {t('settings.hideCommentsSection')}
+                </div>
+
+                <p className="text-xl font-semibold tracking-tight text-white sm:text-2xl">
+                  {t('comments.sectionDisabledTitle')}
+                </p>
+
+                <p className="mx-auto mt-3 max-w-xl text-sm leading-7 text-slate-300 sm:text-base">
+                  {t('comments.sectionDisabledDesc')}
+                </p>
+
+                <p className="mx-auto mt-2 max-w-lg text-xs leading-6 text-slate-400 sm:text-sm">
+                  {t('settings.hideCommentsSectionDesc')}
+                </p>
+
+                <div className="mt-6 flex flex-col items-center justify-center gap-3 sm:flex-row">
+                  <Link
+                    to="/settings"
+                    className="inline-flex items-center gap-2 rounded-full border border-blue-400/20 bg-blue-500/10 px-4 py-2.5 text-sm font-medium text-blue-100 transition-all hover:border-blue-300/35 hover:bg-blue-500/15 hover:text-white"
+                  >
+                    <span>{t('nav.settings')}</span>
+                    <ExternalLink className="h-4 w-4" />
+                  </Link>
+
+                  <div className="inline-flex items-center rounded-full border border-white/8 bg-white/[0.04] px-4 py-2 text-xs text-slate-400 sm:text-sm">
+                    {contentType === 'movie' ? t('comments.onThisMovie') : t('comments.onThisSeries')}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        </div>
+      )}
     </div >
 
     {/* Popup de confirmation de suppression */}

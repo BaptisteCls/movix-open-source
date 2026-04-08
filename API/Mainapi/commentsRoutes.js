@@ -522,6 +522,70 @@ async function createNotification(
   }
 }
 
+const REPORT_NOTIFICATION_TYPES = {
+  RESOLVED: "report_resolved",
+  RESOLVED_DELETED: "report_resolved_deleted",
+  DISMISSED: "report_dismissed",
+};
+
+async function getReportNotificationTarget(report) {
+  try {
+    if (report.target_type === "comment") {
+      const comment = await dbGet(
+        "SELECT content_type, content_id FROM comments WHERE id = ?",
+        [report.target_id],
+      );
+      if (comment) {
+        return {
+          contentType: comment.content_type,
+          contentId: String(comment.content_id),
+          targetId: Number(report.target_id),
+        };
+      }
+    } else if (report.target_type === "reply") {
+      const reply = await dbGet(
+        "SELECT comment_id FROM comment_replies WHERE id = ?",
+        [report.target_id],
+      );
+      if (reply) {
+        const comment = await dbGet(
+          "SELECT content_type, content_id FROM comments WHERE id = ?",
+          [reply.comment_id],
+        );
+        if (comment) {
+          return {
+            contentType: comment.content_type,
+            contentId: String(comment.content_id),
+            targetId: Number(report.target_id),
+          };
+        }
+      }
+    } else if (report.target_type === "shared_list") {
+      const pool = getCachedPool();
+      const [rows] = await pool.execute(
+        "SELECT id, share_code FROM shared_lists WHERE share_code = ? OR id = ?",
+        [report.target_id, report.target_id],
+      );
+      if (rows.length > 0) {
+        const sharedList = rows[0];
+        return {
+          contentType: "shared_list",
+          contentId: String(sharedList.share_code || sharedList.id || report.target_id),
+          targetId: Number(sharedList.id) || Number(report.target_id) || 0,
+        };
+      }
+    }
+  } catch (error) {
+    console.error("Erreur lors de la préparation de la notification de signalement:", error);
+  }
+
+  return {
+    contentType: report.target_type,
+    contentId: String(report.target_id),
+    targetId: Number(report.target_id) || 0,
+  };
+}
+
 // === #18: Batch cascade delete — requêtes batch au lieu de récursion séquentielle ===
 
 // Fonction helper pour récupérer tous les IDs de réponses d'un commentaire (ou sous-arbre d'une réponse)
@@ -2973,9 +3037,15 @@ router.put("/admin/reports/:id/resolve", requireAuth, async (req, res) => {
     const { id } = req.params;
     const { deleteContent } = req.body;
 
-    const report = await dbGet("SELECT * FROM reports WHERE id = ?", [id]);
+    const report = await dbGet("SELECT * FROM reports WHERE id = ? AND status = 'pending'", [id]);
     if (!report)
       return res.status(404).json({ error: "Signalement non trouvé" });
+
+    const pendingReports = await dbAll(
+      "SELECT reporter_user_id, reporter_user_type, reporter_profile_id, target_type, target_id FROM reports WHERE target_type = ? AND target_id = ? AND status = 'pending'",
+      [report.target_type, report.target_id],
+    );
+    const notificationTarget = await getReportNotificationTarget(report);
 
     if (deleteContent) {
       if (report.target_type === "comment") {
@@ -2996,10 +3066,34 @@ router.put("/admin/reports/:id/resolve", requireAuth, async (req, res) => {
       }
     }
 
-    await dbRun(
+    const updateResult = await dbRun(
       `UPDATE reports SET status = 'resolved', resolved_by = ?, resolved_at = ? WHERE target_type = ? AND target_id = ? AND status = 'pending'`,
       [req.user.userId, Date.now(), report.target_type, report.target_id],
     );
+
+    if (updateResult.changes > 0 && pendingReports.length > 0) {
+      const notificationType = deleteContent
+        ? REPORT_NOTIFICATION_TYPES.RESOLVED_DELETED
+        : REPORT_NOTIFICATION_TYPES.RESOLVED;
+
+      await Promise.all(pendingReports.map(async (pendingReport) => {
+        await createNotification(
+          pendingReport.reporter_user_id,
+          pendingReport.reporter_user_type,
+          pendingReport.reporter_profile_id,
+          req.user.userId,
+          null,
+          userData.username,
+          userData.avatar,
+          notificationType,
+          pendingReport.target_type,
+          notificationTarget.targetId,
+          notificationTarget.contentType,
+          notificationTarget.contentId,
+          null,
+        );
+      }));
+    }
 
     res.json({ success: true, message: "Signalement résolu" });
   } catch (error) {
@@ -3016,14 +3110,40 @@ router.put("/admin/reports/:id/dismiss", requireAuth, async (req, res) => {
       return res.status(403).json({ error: "Non autorisé" });
 
     const { id } = req.params;
-    const report = await dbGet("SELECT * FROM reports WHERE id = ?", [id]);
+    const report = await dbGet("SELECT * FROM reports WHERE id = ? AND status = 'pending'", [id]);
     if (!report)
       return res.status(404).json({ error: "Signalement non trouvé" });
 
-    await dbRun(
+    const pendingReports = await dbAll(
+      "SELECT reporter_user_id, reporter_user_type, reporter_profile_id, target_type, target_id FROM reports WHERE target_type = ? AND target_id = ? AND status = 'pending'",
+      [report.target_type, report.target_id],
+    );
+    const notificationTarget = await getReportNotificationTarget(report);
+
+    const updateResult = await dbRun(
       `UPDATE reports SET status = 'dismissed', resolved_by = ?, resolved_at = ? WHERE target_type = ? AND target_id = ? AND status = 'pending'`,
       [req.user.userId, Date.now(), report.target_type, report.target_id],
     );
+
+    if (updateResult.changes > 0 && pendingReports.length > 0) {
+      await Promise.all(pendingReports.map(async (pendingReport) => {
+        await createNotification(
+          pendingReport.reporter_user_id,
+          pendingReport.reporter_user_type,
+          pendingReport.reporter_profile_id,
+          req.user.userId,
+          null,
+          userData.username,
+          userData.avatar,
+          REPORT_NOTIFICATION_TYPES.DISMISSED,
+          pendingReport.target_type,
+          notificationTarget.targetId,
+          notificationTarget.contentType,
+          notificationTarget.contentId,
+          null,
+        );
+      }));
+    }
 
     res.json({ success: true, message: "Signalement rejeté" });
   } catch (error) {

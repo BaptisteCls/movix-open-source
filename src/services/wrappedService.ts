@@ -6,7 +6,7 @@
 const MAIN_API = import.meta.env.VITE_MAIN_API;
 
 export interface WrappedSlide {
-    type: 'intro' | 'top1' | 'top5' | 'persona' | 'peak-month' | 'top-genres' | 'listening-clock' | 'streak' | 'fun-fact' | 'closing' | 'detailed-stats';
+    type: 'intro' | 'top1' | 'top5' | 'top2-focus' | 'top3-focus' | 'persona' | 'peak-month' | 'top-genres' | 'listening-clock' | 'streak' | 'fun-fact' | 'closing' | 'detailed-stats' | 'session-summary' | 'watch-bookends';
     title: string;
     subtitle?: string;
     text: string;

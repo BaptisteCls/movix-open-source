@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import axios, { CancelTokenSource } from 'axios';
-import { Link, useNavigate, useLocation } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { Info, Star, Loader2 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
@@ -325,18 +325,12 @@ interface ContinueWatching {
 
 const Home: React.FC = () => {
   const { t } = useTranslation();
-  const navigate = useNavigate();
   const location = useLocation();
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [heroItems, setHeroItems] = useState<Media[]>([]);
-  const [featured, setFeatured] = useState<Media | null>(null);
   const [currentHeroIndex, setCurrentHeroIndex] = useState(0);
   const [trending, setTrending] = useState<Media[]>([]);
   const [popularMovies, setPopularMovies] = useState<Media[]>([]);
-  const [topRatedMovies, setTopRatedMovies] = useState<Media[]>([]);
-  const [topRatedTVShows, setTopRatedTVShows] = useState<Media[]>([]);
-  const [popularTVShows, setPopularTVShows] = useState<Media[]>([]);
   const [topContent, setTopContent] = useState<Media[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [sagaCollections, setSagaCollections] = useState<any[]>([]);
@@ -409,7 +403,6 @@ const Home: React.FC = () => {
 
     try {
       setLoading(true);
-      setError(null);
 
       // Check for cached data first
       const cachedData = sessionStorage.getItem('movix_home_data');
@@ -424,9 +417,6 @@ const Home: React.FC = () => {
           setHeroItems(parsedData.heroItems || []);
           setTrending(parsedData.trending || []);
           setPopularMovies(parsedData.popularMovies || []);
-          setTopRatedMovies(parsedData.topRatedMovies || []);
-          setTopRatedTVShows(parsedData.topRatedTVShows || []);
-          setPopularTVShows(parsedData.popularTVShows || []);
 
           // Set topContent from cache or use trending as fallback
           const cachedTopContent = parsedData.topContent || [];
@@ -500,7 +490,6 @@ const Home: React.FC = () => {
       // Process batches sequentially to reduce load
       const batch1Responses = await processBatch(batch1);
       if (batch1Responses.length === 0) {
-        setError(t('home.errorLoadingMain'));
         setLoading(false);
         return;
       }
@@ -528,7 +517,6 @@ const Home: React.FC = () => {
       // Update UI with initial data
       setTrending(trendingItems);
       setPopularMovies(popularMovies);
-      setPopularTVShows(popularTV);
       setHeroItems(trendingItems.slice(0, 5));
 
       // Continue fetching remaining batches
@@ -584,9 +572,6 @@ const Home: React.FC = () => {
       setHeroItems(filteredItems.slice(0, 5)); // Take top 5 for hero slider
       setTrending(filteredItems.slice(5));
       setPopularMovies(popularMovies);
-      setTopRatedMovies(topRatedMovies);
-      setTopRatedTVShows(topRatedTV);
-      setPopularTVShows(popularTV);
 
       // Set topContent - use upcomingMovies if available, otherwise use trending as fallback
       const topContentData = upcomingMovies.length > 0
@@ -622,7 +607,6 @@ const Home: React.FC = () => {
         console.log('Data fetching canceled:', error.message);
       } else {
         console.error('Error fetching data:', error);
-        setError(t('home.errorLoadingData'));
       }
     } finally {
       setLoading(false);
@@ -700,15 +684,6 @@ const Home: React.FC = () => {
       sessionStorage.setItem(cacheTsKey, Date.now().toString());
     } catch (e) {
       // Fail silently; the rest of the home page still works
-    }
-  };
-
-  const getWatchHistory = () => {
-    const savedItems = localStorage.getItem('continueWatching');
-    if (savedItems) {
-      return JSON.parse(savedItems);
-    } else {
-      return [];
     }
   };
 
@@ -891,7 +866,6 @@ const Home: React.FC = () => {
   // Update featured content when hero index changes
   useEffect(() => {
     if (heroItems.length > 0 && currentHeroIndex < heroItems.length) {
-      setFeatured(heroItems[currentHeroIndex]);
     }
   }, [currentHeroIndex, heroItems]);
 
@@ -1042,72 +1016,6 @@ const Home: React.FC = () => {
       }
     };
   }, []);
-
-
-
-  // Function to get movie progress data
-  const getMovieProgress = (movieId: number): { percentage: number, position?: number, duration?: number } => {
-    try {
-      // Check in movie specific storage
-      const progressKey = `progress_${movieId}`;
-      const savedData = localStorage.getItem(progressKey);
-
-      if (savedData) {
-        const progressData = JSON.parse(savedData);
-        if (progressData.position && progressData.duration) {
-          return {
-            percentage: Math.min((progressData.position / progressData.duration) * 100, 100),
-            position: progressData.position,
-            duration: progressData.duration
-          };
-        }
-      }
-
-      return { percentage: 0 }; // No progress found
-    } catch (error) {
-      console.error('Error getting movie progress:', error);
-      return { percentage: 0 };
-    }
-  };
-
-  // Function to get episode progress data
-  const getEpisodeProgress = (showId: number, seasonNumber: number, episodeNumber: number): { percentage: number, position?: number, duration?: number } => {
-    try {
-      // Check in episode specific storage
-      const progressKey = `progress_tv_${showId}_s${seasonNumber}_e${episodeNumber}`;
-      const savedData = localStorage.getItem(progressKey);
-
-      if (savedData) {
-        const progressData = JSON.parse(savedData);
-        if (progressData.position && progressData.duration) {
-          return {
-            percentage: Math.min((progressData.position / progressData.duration) * 100, 100),
-            position: progressData.position,
-            duration: progressData.duration
-          };
-        }
-      }
-
-      return { percentage: 0 }; // No progress found
-    } catch (error) {
-      console.error('Error getting episode progress:', error);
-      return { percentage: 0 };
-    }
-  };
-
-  // Format time in human-readable format (HH:MM:SS or MM:SS)
-  const formatTime = (seconds: number) => {
-    const hours = Math.floor(seconds / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-    const secs = Math.floor(seconds % 60);
-
-    if (hours > 0) {
-      return `${hours}h ${minutes.toString().padStart(2, '0')}m ${secs.toString().padStart(2, '0')}s`;
-    }
-    return `${minutes}m ${secs.toString().padStart(2, '0')}s`;
-  };
-
-
 
   // Removed the visibility change handler that was causing unnecessary logo refreshes
 

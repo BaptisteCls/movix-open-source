@@ -273,11 +273,6 @@ export const SearchProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setAutocompleteSuggestions([]);
   };
 
-  const checkAvailability = async (item: SearchResult) => {
-    // Toujours retourner true sans vérification
-    return true;
-  };
-
   const performSearch = async (pageNum: number, isNewSearch: boolean = false) => {
     // Modifier la définition de isGenreSearch pour ne pas dépendre de query
     const hasFilters = selectedGenres.length > 0 || selectedType !== 'all' || minRating > 0 || director || actor || year || selectedLanguage || selectedCountry;
@@ -670,20 +665,24 @@ export const SearchProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       setLoadingGenres(true);
       try {
         const [movieGenres, tvGenres] = await Promise.all([
-          axios.get(`https://api.themoviedb.org/3/genre/movie/list?api_key=${TMDB_API_KEY}`),
-          axios.get(`https://api.themoviedb.org/3/genre/tv/list?api_key=${TMDB_API_KEY}`)
+          axios.get('https://api.themoviedb.org/3/genre/movie/list', {
+            params: { api_key: TMDB_API_KEY, language: getTmdbLanguage() }
+          }),
+          axios.get('https://api.themoviedb.org/3/genre/tv/list', {
+            params: { api_key: TMDB_API_KEY, language: getTmdbLanguage() }
+          })
         ]);
 
-        const excludedGenres = [
-          'War & Politics',
-          'Talk',
-          'Soap',
-          'Sci-Fi & Fantasy',
-          'News',
-          'Kids',
-          'Action & Adventure',
-          'Documentary',
-          'Reality'
+        const excludedGenreIds = [
+          99,
+          10759,
+          10762,
+          10763,
+          10764,
+          10765,
+          10766,
+          10767,
+          10768
         ];
 
         let filteredGenres;
@@ -691,25 +690,23 @@ export const SearchProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           filteredGenres = movieGenres.data.genres;
         } else if (selectedType === 'tv') {
           filteredGenres = tvGenres.data.genres.filter((genre: Genre) =>
-            !excludedGenres.includes(genre.name)
+            !excludedGenreIds.includes(genre.id)
           );
         } else {
           filteredGenres = Array.from(new Set([
             ...movieGenres.data.genres,
             ...tvGenres.data.genres.filter((genre: Genre) =>
-              !excludedGenres.includes(genre.name)
+              !excludedGenreIds.includes(genre.id)
             )
           ].map((genre) => JSON.stringify(genre))))
             .map((genre) => JSON.parse(genre));
         }
 
         // Remplacement des noms par les noms français
-        const genresFr = filteredGenres.map((genre: Genre) => ({
-          id: genre.id,
-          name: GENRES_FR[genre.id] || genre.name
-        }));
-
-        setGenres(genresFr);
+        setGenres(filteredGenres.map((genre: Genre) => ({
+          ...genre,
+          name: genre.name || GENRES_FR[genre.id] || ''
+        })));
         setSelectedGenres([]);
       } catch (error) {
         console.error('Error fetching genres:', error);

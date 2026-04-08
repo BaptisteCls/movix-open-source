@@ -272,6 +272,8 @@ export function getSearchNameForId(
       return "Death Note"; // Cas spécial pour Death Note (anime)
     case "250598":
       return "The Ossan Newbie Adventurer"; // Cas spécial pour Shinmai Ossan Bokensha
+    case "70881":
+      return "Boruto"; // Cas spÃ©cial pour Boruto: Naruto Next Generations
     default:
       return defaultName;
   }
@@ -407,6 +409,11 @@ export function getAnimeMatcherForId(
       return (anime) =>
         (anime.name?.toLowerCase().includes("ossan") ||
           anime.name?.toLowerCase().includes("shinmai")) &&
+        anime.seasons !== undefined &&
+        anime.seasons.length > 0;
+    case "70881": // Boruto: Naruto Next Generations
+      return (anime) =>
+        anime.name?.toLowerCase() === "boruto" &&
         anime.seasons !== undefined &&
         anime.seasons.length > 0;
     default:
