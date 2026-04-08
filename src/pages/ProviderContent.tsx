@@ -9,6 +9,7 @@ import EmblaCarousel from '../components/EmblaCarousel';
 import ContentRowSkeleton from '../components/skeletons/ContentRowSkeleton';
 import LazySection from '../components/LazySection';
 import { getTmdbLanguage } from '../i18n';
+import { getMinimumCarouselCategoryItems, makeExclusiveCategories } from '../utils/exclusiveCategories';
 
 // Nombre de sections à charger immédiatement
 const IMMEDIATE_LOAD_COUNT = 2;
@@ -810,7 +811,7 @@ const ProviderContent: React.FC = () => {
     const minItemsPerCategory = 4;
 
     // Convert the genre map to categories array
-    const newCategories: Category[] = Object.entries(genreMap)
+    const genreCategories: Category[] = Object.entries(genreMap)
       .map(([genreId, items]) => ({
         id: genreId,
         title: getGenreName(Number(genreId)) || `Category ${genreId}`,
@@ -840,21 +841,25 @@ const ProviderContent: React.FC = () => {
       .slice(0, 15); // Réduit de 20 à 15 pour de meilleures performances
 
     // N'ajouter ces catégories que si elles contiennent suffisamment d'éléments
+    const orderedCategories: Category[] = [];
+
+    if (recentTVShows.length >= minItemsPerCategory) {
+      orderedCategories.push({
+        id: 'recent-tv',
+        title: t('providerCatalog.recentSeries'),
+        items: recentTVShows
+      });
+    }
+
     if (recentMovies.length >= minItemsPerCategory) {
-      newCategories.unshift({
+      orderedCategories.push({
         id: 'recent-movies',
         title: t('providerCatalog.recentFilms'),
         items: recentMovies
       });
     }
 
-    if (recentTVShows.length >= minItemsPerCategory) {
-      newCategories.unshift({
-        id: 'recent-tv',
-        title: t('providerCatalog.recentSeries'),
-        items: recentTVShows
-      });
-    }
+    orderedCategories.push(...genreCategories);
 
     // Ajouter une catégorie pour les films les mieux notés
     const topRatedContent = [...allContent]
@@ -862,14 +867,18 @@ const ProviderContent: React.FC = () => {
       .slice(0, 15); // Réduit de 20 à 15 pour de meilleures performances
 
     if (topRatedContent.length >= minItemsPerCategory) {
-      newCategories.push({
+      orderedCategories.push({
         id: 'top-rated',
         title: t('providerCatalog.bestRated'),
         items: topRatedContent
       });
     }
 
-    setCategories(newCategories);
+    setCategories(makeExclusiveCategories(orderedCategories, {
+      minItems: Math.max(minItemsPerCategory, getMinimumCarouselCategoryItems()),
+      limit: 10,
+      perCategoryLimit: 15
+    }));
   };
 
   useEffect(() => {

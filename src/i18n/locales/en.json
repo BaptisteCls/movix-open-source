@@ -1247,6 +1247,10 @@
     "elementsLabel": "Elements:",
     "perRow": "per row",
     "searchHint": "If you can't find the movie or TV show you're looking for, try different keywords or check the spelling or try again with the same title",
+    "keywords": "TMDB keywords",
+    "keywordPlaceholder": "Search a TMDB keyword",
+    "keywordHint": "Add one or more TMDB keywords to narrow the results.",
+    "noKeywordResults": "No keyword found",
     "retirer": "Remove",
     "watchlist": "Watchlist",
     "searchError": "An error occurred while searching. Please try again."

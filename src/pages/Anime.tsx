@@ -9,13 +9,17 @@ import LazySection from '../components/LazySection';
 import TelegramPromotion from '../components/TelegramPromotion';
 import { useWrappedTracker } from '../hooks/useWrappedTracker';
 import { getTmdbLanguage } from '../i18n';
+import { getNumericAge } from '../utils/certificationUtils';
+import { resolveTmdbKeywordId } from '../utils/tmdbKeywords';
 
 const TMDB_API_KEY = import.meta.env.VITE_TMDB_API_KEY || '';
-const IMMEDIATE_LOAD_COUNT = 3;
+const IMMEDIATE_LOAD_COUNT = 2;
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 const DATA_CACHE_TTL_MS = 15 * 60 * 1000;
-const ANIME_KEYWORD_QUERY = 'anime';
-const ANIME_KEYWORD_CACHE_KEY = 'movix_anime_keyword_id';
+const MATURE_ANIME_AGE_THRESHOLD = 17;
+const CONTENT_RATING_REGION_PRIORITY = ['FR', 'US', 'JP', 'GB', 'CA'] as const;
+const CONTENT_RATING_CACHE_PREFIX = 'movix_anime_content_rating_';
+const CONTENT_RATING_CONCURRENCY = 12;
 
 interface AnimeShow {
   id: number;
@@ -35,7 +39,6 @@ interface Category {
   id: string;
   title: string;
   items: AnimeShow[];
-  score?: number;
 }
 
 const ANIME_GENRE_CONFIG = [
@@ -105,14 +108,6 @@ const pageStyles = `
   width: 100%;
   background: linear-gradient(90deg, #ff3333, #ff9999);
 }
-
-.content-row-container {
-  padding: 5px 0px 40px 0px;
-  margin-top: -30px;
-  overflow: visible !important;
-  position: relative;
-  z-index: 1;
-}
 `;
 
 const uniqueById = (items: AnimeShow[]) =>
@@ -130,54 +125,8 @@ const getAnimeReleaseTimestamp = (show: AnimeShow) => {
   return Number.isNaN(timestamp) ? 0 : timestamp;
 };
 
-const getAnimeSortScore = (show: AnimeShow) => {
-  const popularityScore = Math.log10((show.popularity ?? 0) + 1) * 18;
-  const voteCountScore = Math.log10((show.vote_count ?? 0) + 1) * 22;
-  const ratingScore = (show.vote_average ?? 0) * 12;
-  const recencyScore = (() => {
-    const releaseTimestamp = getAnimeReleaseTimestamp(show);
-    if (!releaseTimestamp) {
-      return 0;
-    }
-
-    const ageInDays = Math.max(0, (Date.now() - releaseTimestamp) / (1000 * 60 * 60 * 24));
-    return Math.max(0, 15 - Math.min(ageInDays / 180, 15));
-  })();
-
-  return popularityScore + voteCountScore + ratingScore + recencyScore;
-};
-
 const compareAnimeTitles = (left: AnimeShow, right: AnimeShow) =>
   left.name.localeCompare(right.name, undefined, { sensitivity: 'base', numeric: true });
-
-const compareAnimeByQuality = (left: AnimeShow, right: AnimeShow) => {
-  const scoreDiff = getAnimeSortScore(right) - getAnimeSortScore(left);
-  if (scoreDiff !== 0) {
-    return scoreDiff;
-  }
-
-  const ratingDiff = (right.vote_average ?? 0) - (left.vote_average ?? 0);
-  if (ratingDiff !== 0) {
-    return ratingDiff;
-  }
-
-  const voteCountDiff = (right.vote_count ?? 0) - (left.vote_count ?? 0);
-  if (voteCountDiff !== 0) {
-    return voteCountDiff;
-  }
-
-  const popularityDiff = (right.popularity ?? 0) - (left.popularity ?? 0);
-  if (popularityDiff !== 0) {
-    return popularityDiff;
-  }
-
-  const dateDiff = getAnimeReleaseTimestamp(right) - getAnimeReleaseTimestamp(left);
-  if (dateDiff !== 0) {
-    return dateDiff;
-  }
-
-  return compareAnimeTitles(left, right);
-};
 
 const compareAnimeByPopularity = (left: AnimeShow, right: AnimeShow) => {
   const popularityDiff = (right.popularity ?? 0) - (left.popularity ?? 0);
@@ -195,11 +144,6 @@ const compareAnimeByPopularity = (left: AnimeShow, right: AnimeShow) => {
     return ratingDiff;
   }
 
-  const dateDiff = getAnimeReleaseTimestamp(right) - getAnimeReleaseTimestamp(left);
-  if (dateDiff !== 0) {
-    return dateDiff;
-  }
-
   return compareAnimeTitles(left, right);
 };
 
@@ -209,36 +153,7 @@ const compareAnimeByRecent = (left: AnimeShow, right: AnimeShow) => {
     return dateDiff;
   }
 
-  const scoreDiff = getAnimeSortScore(right) - getAnimeSortScore(left);
-  if (scoreDiff !== 0) {
-    return scoreDiff;
-  }
-
-  return compareAnimeTitles(left, right);
-};
-
-const compareAnimeByRating = (left: AnimeShow, right: AnimeShow) => {
-  const ratingDiff = (right.vote_average ?? 0) - (left.vote_average ?? 0);
-  if (ratingDiff !== 0) {
-    return ratingDiff;
-  }
-
-  const voteCountDiff = (right.vote_count ?? 0) - (left.vote_count ?? 0);
-  if (voteCountDiff !== 0) {
-    return voteCountDiff;
-  }
-
-  const popularityDiff = (right.popularity ?? 0) - (left.popularity ?? 0);
-  if (popularityDiff !== 0) {
-    return popularityDiff;
-  }
-
-  const dateDiff = getAnimeReleaseTimestamp(right) - getAnimeReleaseTimestamp(left);
-  if (dateDiff !== 0) {
-    return dateDiff;
-  }
-
-  return compareAnimeTitles(left, right);
+  return compareAnimeByPopularity(left, right);
 };
 
 const buildAnimeDiscoverParams = (
@@ -250,50 +165,85 @@ const buildAnimeDiscoverParams = (
   language,
   include_adult: false,
   with_genres: '16',
-  with_origin_country: 'JP',
   sort_by: 'popularity.desc',
   'vote_count.gte': 25,
   ...(keywordId ? { with_keywords: String(keywordId) } : {}),
   ...overrides,
 });
 
-const normalizeKeywordLabel = (value: string) =>
-  value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+const getPreferredContentCertification = (contentRatings: Array<{ iso_3166_1?: string; rating?: string }>) => {
+  for (const region of CONTENT_RATING_REGION_PRIORITY) {
+    const match = contentRatings.find((item) => item.iso_3166_1 === region && item.rating);
+    if (match?.rating) {
+      return match.rating;
+    }
+  }
 
-const resolveAnimeKeywordId = async (): Promise<number | null> => {
+  const fallback = contentRatings.find((item) => item.rating);
+  return fallback?.rating || '';
+};
+
+const getCachedContentAge = (showId: number) => {
   try {
-    const cachedKeywordId = sessionStorage.getItem(ANIME_KEYWORD_CACHE_KEY);
-    if (cachedKeywordId) {
-      const parsedKeywordId = Number(cachedKeywordId);
-      if (!Number.isNaN(parsedKeywordId)) {
-        return parsedKeywordId;
-      }
+    const cachedValue = sessionStorage.getItem(`${CONTENT_RATING_CACHE_PREFIX}${showId}`);
+    if (!cachedValue) {
+      return null;
     }
 
-    const response = await axios.get('https://api.themoviedb.org/3/search/keyword', {
+    const parsedValue = JSON.parse(cachedValue) as { age?: number };
+    return typeof parsedValue.age === 'number' ? parsedValue.age : null;
+  } catch {
+    return null;
+  }
+};
+
+const setCachedContentAge = (showId: number, age: number) => {
+  try {
+    sessionStorage.setItem(`${CONTENT_RATING_CACHE_PREFIX}${showId}`, JSON.stringify({ age }));
+  } catch {
+    // Ignore cache write failures.
+  }
+};
+
+const getAnimeContentAge = async (showId: number) => {
+  const cachedAge = getCachedContentAge(showId);
+  if (cachedAge !== null) {
+    return cachedAge;
+  }
+
+  try {
+    const response = await axios.get(`https://api.themoviedb.org/3/tv/${showId}/content_ratings`, {
       params: {
         api_key: TMDB_API_KEY,
-        query: ANIME_KEYWORD_QUERY,
       },
     });
 
-    const keyword = Array.isArray(response.data?.results)
-      ? response.data.results.find((item: { name?: string }) =>
-          normalizeKeywordLabel(item.name || '') === ANIME_KEYWORD_QUERY,
-        ) ?? response.data.results.find((item: { name?: string }) =>
-          normalizeKeywordLabel(item.name || '').includes(ANIME_KEYWORD_QUERY),
-        )
-      : null;
+    const contentRatings = Array.isArray(response.data?.results) ? response.data.results : [];
+    const certification = getPreferredContentCertification(contentRatings);
+    const age = certification ? getNumericAge(certification) : 0;
+    setCachedContentAge(showId, age);
+    return age;
+  } catch {
+    setCachedContentAge(showId, 0);
+    return 0;
+  }
+};
 
-    if (keyword?.id) {
-      sessionStorage.setItem(ANIME_KEYWORD_CACHE_KEY, String(keyword.id));
-      return keyword.id;
-    }
-  } catch (error) {
-    console.warn('Unable to resolve anime keyword id:', error);
+const filterMatureAnime = async (items: AnimeShow[]) => {
+  const results: AnimeShow[] = [];
+
+  for (let index = 0; index < items.length; index += CONTENT_RATING_CONCURRENCY) {
+    const chunk = items.slice(index, index + CONTENT_RATING_CONCURRENCY);
+    const ages = await Promise.all(chunk.map((item) => getAnimeContentAge(item.id)));
+
+    chunk.forEach((item, chunkIndex) => {
+      if (ages[chunkIndex] < MATURE_ANIME_AGE_THRESHOLD) {
+        results.push(item);
+      }
+    });
   }
 
-  return null;
+  return results;
 };
 
 const Anime: React.FC = () => {
@@ -307,9 +257,9 @@ const Anime: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const dataCacheKey = `movix_anime_data_${tmdbLanguage}`;
+  const dataCacheKey = `movix_anime_data_v2_${tmdbLanguage}`;
   const dataCacheTsKey = `${dataCacheKey}_timestamp`;
-  const genreImageCacheKey = `movix_anime_genre_images_${tmdbLanguage}`;
+  const genreImageCacheKey = `movix_anime_genre_images_v2_${tmdbLanguage}`;
   const genreImageCacheTsKey = `${genreImageCacheKey}_timestamp`;
 
   useWrappedTracker({
@@ -330,31 +280,6 @@ const Anime: React.FC = () => {
     }));
   }, [genreImages, t]);
 
-  const rankedAnimeShows = useMemo(() => {
-    return uniqueById(animeShows).filter(isValidAnimeShow).sort(compareAnimeByQuality);
-  }, [animeShows]);
-
-  const popularAnimeShows = useMemo(() => {
-    return [...rankedAnimeShows].sort(compareAnimeByPopularity).slice(0, 15);
-  }, [rankedAnimeShows]);
-
-  const topRatedAnimeShows = useMemo(() => {
-    return rankedAnimeShows
-      .filter((show) => (show.vote_count ?? 0) >= 50)
-      .sort(compareAnimeByRating)
-      .slice(0, 15);
-  }, [rankedAnimeShows]);
-
-  const keywordHighlightShows = useMemo(() => {
-    return rankedAnimeShows
-      .filter((show) => (show.vote_count ?? 0) >= 100 || (show.vote_average ?? 0) >= 7.2)
-      .slice(0, 15);
-  }, [rankedAnimeShows]);
-
-  const keywordRecentShows = useMemo(() => {
-    return [...rankedAnimeShows].sort(compareAnimeByRecent).slice(0, 15);
-  }, [rankedAnimeShows]);
-
   const organizeContentByCategories = useCallback((items: AnimeShow[]) => {
     const filteredItems = uniqueById(items).filter(isValidAnimeShow);
     const genreMap: Record<number, AnimeShow[]> = {};
@@ -364,9 +289,11 @@ const Anime: React.FC = () => {
         if (genreId === 16) {
           return;
         }
+
         if (!genreMap[genreId]) {
           genreMap[genreId] = [];
         }
+
         if (!genreMap[genreId].some((show) => show.id === item.id)) {
           genreMap[genreId].push(item);
         }
@@ -374,42 +301,56 @@ const Anime: React.FC = () => {
     });
 
     const priorityMap = new Map(CATEGORY_PRIORITY.map((id, index) => [id, index]));
-    const getCategoryRank = (category: Category) => {
-      const priorityIndex = priorityMap.get(Number(category.id));
-      const priorityBonus = priorityIndex === undefined ? 0 : (priorityMap.size - priorityIndex) * 20;
-      return (category.score ?? 0) + priorityBonus;
-    };
-
-    const dynamicCategories: Category[] = Object.entries(genreMap)
+    const rawGenreCategories = Object.entries(genreMap)
       .map(([genreId, genreItems]) => {
-        const rankedGenreItems = [...genreItems].sort(compareAnimeByQuality);
-        const categoryScore = rankedGenreItems.reduce((sum, item) => sum + getAnimeSortScore(item), 0) / Math.max(rankedGenreItems.length, 1);
+        const sortedItems = [...genreItems].sort(compareAnimeByPopularity);
+        const priorityIndex = priorityMap.get(Number(genreId));
+        const priorityBoost = priorityIndex === undefined ? 0 : (CATEGORY_PRIORITY.length - priorityIndex) * 5;
 
         return {
           id: genreId,
           title: getGenreLabel(Number(genreId)),
-          items: rankedGenreItems.slice(0, 15),
-          score: categoryScore,
+          items: sortedItems.slice(0, 15),
+          score: sortedItems.length + priorityBoost,
         };
       })
       .filter((category) => category.items.length >= 3)
-      .sort((left, right) => {
-        const rankDiff = getCategoryRank(right) - getCategoryRank(left);
-        if (rankDiff !== 0) {
-          return rankDiff;
-        }
+      .sort((left, right) => right.score - left.score);
 
-        const itemCountDiff = right.items.length - left.items.length;
-        if (itemCountDiff !== 0) {
-          return itemCountDiff;
-        }
+    const usedShowIds = new Set<number>();
+    const genreCategories = rawGenreCategories
+      .map(({ id, title, items }) => {
+        const distinctItems = items
+          .filter((item) => !usedShowIds.has(item.id))
+          .slice(0, 15);
 
-        return left.title.localeCompare(right.title, undefined, { sensitivity: 'base', numeric: true });
+        distinctItems.forEach((item) => {
+          usedShowIds.add(item.id);
+        });
+
+        return { id, title, items: distinctItems };
       })
-      .slice(0, 6);
+      .filter((category) => category.items.length >= 4)
+      .slice(0, 6)
+      .map(({ id, title, items }) => ({ id, title, items }));
 
-    setCategories(dynamicCategories);
-  }, [getGenreLabel]);
+    const recentShows = filteredItems
+      .filter((item) => Boolean(item.first_air_date))
+      .sort(compareAnimeByRecent)
+      .slice(0, 15);
+
+    const nextCategories: Category[] = [];
+    if (recentShows.length >= 5) {
+      nextCategories.push({
+        id: 'recent-anime',
+        title: t('animePage.recentAnime'),
+        items: recentShows,
+      });
+    }
+
+    nextCategories.push(...genreCategories);
+    setCategories(nextCategories);
+  }, [getGenreLabel, t]);
 
   const fetchAnimeShows = useCallback(async () => {
     try {
@@ -422,72 +363,41 @@ const Anime: React.FC = () => {
       if (cachedData && cacheTimestamp) {
         const isRecent = (Date.now() - Number(cacheTimestamp)) < DATA_CACHE_TTL_MS;
         if (isRecent) {
-          const parsed = JSON.parse(cachedData);
-          setAnimeShows(parsed.animeShows || []);
-          setFeaturedShows(parsed.featuredShows || []);
-          setTopContent(parsed.topContent || []);
-          organizeContentByCategories(parsed.animeShows || []);
+          const parsedData = JSON.parse(cachedData);
+          setFeaturedShows(parsedData.featuredShows || []);
+          setTopContent(parsedData.topContent || []);
+          setAnimeShows(parsedData.animeShows || []);
+
+          if (Array.isArray(parsedData.animeShows) && parsedData.animeShows.length > 0) {
+            organizeContentByCategories(parsedData.animeShows);
+          }
+
           setLoading(false);
           return;
         }
       }
 
-      const animeKeywordId = await resolveAnimeKeywordId();
+      const animeKeywordId = await resolveTmdbKeywordId('anime', tmdbLanguage);
 
-      const baseRequests = Array.from({ length: 3 }, (_, index) =>
-        axios.get('https://api.themoviedb.org/3/discover/tv', {
-          params: buildAnimeDiscoverParams(tmdbLanguage, animeKeywordId, { page: index + 1 }),
-        }),
-      );
-
-      const curatedRequests = [
-        axios.get('https://api.themoviedb.org/3/discover/tv', {
-          params: buildAnimeDiscoverParams(tmdbLanguage, animeKeywordId, {
-            sort_by: 'vote_average.desc',
-            'vote_count.gte': 250,
-            page: 1,
+      const discoverRequests = [
+        ...Array.from({ length: 3 }, (_, index) =>
+          axios.get('https://api.themoviedb.org/3/discover/tv', {
+            params: buildAnimeDiscoverParams(tmdbLanguage, animeKeywordId, {
+              page: index + 1,
+            }),
           }),
-        }),
-        axios.get('https://api.themoviedb.org/3/discover/tv', {
-          params: buildAnimeDiscoverParams(tmdbLanguage, animeKeywordId, {
-            sort_by: 'first_air_date.desc',
-            'vote_count.gte': 50,
-            page: 1,
+        ),
+        ...ANIME_GENRE_CONFIG.filter((genre) => genre.id !== 16).map((genre) =>
+          axios.get('https://api.themoviedb.org/3/discover/tv', {
+            params: buildAnimeDiscoverParams(tmdbLanguage, animeKeywordId, {
+              page: 1,
+              with_genres: genre.discoverGenres,
+            }),
           }),
-        }),
-        axios.get('https://api.themoviedb.org/3/discover/tv', {
-          params: buildAnimeDiscoverParams(tmdbLanguage, animeKeywordId, {
-            with_genres: '16,10759',
-            page: 1,
-          }),
-        }),
-        axios.get('https://api.themoviedb.org/3/discover/tv', {
-          params: buildAnimeDiscoverParams(tmdbLanguage, animeKeywordId, {
-            with_genres: '16,10765',
-            page: 1,
-          }),
-        }),
-        axios.get('https://api.themoviedb.org/3/discover/tv', {
-          params: buildAnimeDiscoverParams(tmdbLanguage, animeKeywordId, {
-            with_genres: '16,35',
-            page: 1,
-          }),
-        }),
-        axios.get('https://api.themoviedb.org/3/discover/tv', {
-          params: buildAnimeDiscoverParams(tmdbLanguage, animeKeywordId, {
-            with_genres: '16,18',
-            page: 1,
-          }),
-        }),
-        axios.get('https://api.themoviedb.org/3/discover/tv', {
-          params: buildAnimeDiscoverParams(tmdbLanguage, animeKeywordId, {
-            with_genres: '16,9648',
-            page: 1,
-          }),
-        }),
+        ),
       ];
 
-      const responses = await Promise.all([...baseRequests, ...curatedRequests]);
+      const responses = await Promise.all(discoverRequests);
       const allShows = uniqueById(
         responses.flatMap((response) =>
           (response.data?.results || [])
@@ -497,21 +407,23 @@ const Anime: React.FC = () => {
               media_type: 'tv',
             })),
         ),
-      );
-      const rankedShows = [...allShows].sort(compareAnimeByQuality);
+      ).sort(compareAnimeByPopularity);
+      const safeShows = await filterMatureAnime(allShows);
 
-      const featured = rankedShows.filter((show) => show.backdrop_path && show.overview).slice(0, 8);
-      const top = rankedShows.slice(0, 15);
+      const heroShows = safeShows
+        .filter((show) => show.backdrop_path && show.overview)
+        .slice(0, 8);
+      const topAnime = safeShows.slice(0, 15);
 
-      setAnimeShows(rankedShows);
-      setFeaturedShows(featured);
-      setTopContent(top);
-      organizeContentByCategories(rankedShows);
+      setFeaturedShows(heroShows);
+      setTopContent(topAnime);
+      setAnimeShows(safeShows);
+      organizeContentByCategories(safeShows);
 
       sessionStorage.setItem(dataCacheKey, JSON.stringify({
-        animeShows: rankedShows,
-        featuredShows: featured,
-        topContent: top,
+        featuredShows: heroShows,
+        topContent: topAnime,
+        animeShows: safeShows,
       }));
       sessionStorage.setItem(dataCacheTsKey, Date.now().toString());
     } catch (fetchError) {
@@ -537,7 +449,7 @@ const Anime: React.FC = () => {
           return;
         }
 
-        const animeKeywordId = await resolveAnimeKeywordId();
+        const animeKeywordId = await resolveTmdbKeywordId('anime', tmdbLanguage);
         const imageEntries = await Promise.all(
           ANIME_GENRE_CONFIG.map(async (genre) => {
             try {
@@ -548,10 +460,13 @@ const Anime: React.FC = () => {
                 }),
               });
 
-              const firstVisual = Array.isArray(response.data?.results)
-                ? response.data.results.find((show: AnimeShow) => show.backdrop_path || show.poster_path)
-                : null;
+              const candidateShows = Array.isArray(response.data?.results)
+                ? response.data.results.filter((show: AnimeShow) => show.backdrop_path || show.poster_path)
+                : [];
+              const safeCandidateShows = await filterMatureAnime(candidateShows);
+              const firstVisual = safeCandidateShows[0] || null;
               const imagePath = firstVisual?.backdrop_path || firstVisual?.poster_path || '';
+
               return [genre.id, imagePath ? `https://image.tmdb.org/t/p/w780${imagePath}` : undefined] as const;
             } catch {
               return [genre.id, undefined] as const;
@@ -630,73 +545,8 @@ const Anime: React.FC = () => {
           </LazySection>
         )}
 
-        {popularAnimeShows.length > 0 && (
-          <LazySection index={1} immediateLoadCount={IMMEDIATE_LOAD_COUNT}>
-            <EmblaCarousel
-              title={<span><span className="text-pink-500 mr-2">✦</span><span>{t('animePage.popularNow')}</span></span>}
-              items={popularAnimeShows.map((item) => ({
-                ...item,
-                media_type: 'tv',
-                poster_path: item.poster_path || '',
-                backdrop_path: item.backdrop_path || '',
-                overview: item.overview || '',
-              }))}
-              mediaType="anime-popular-tmdb"
-            />
-          </LazySection>
-        )}
-
-        {topRatedAnimeShows.length > 0 && (
-          <LazySection index={2} immediateLoadCount={IMMEDIATE_LOAD_COUNT}>
-            <EmblaCarousel
-              title={<span><span className="text-amber-400 mr-2">★</span><span>{t('animePage.topRated')}</span></span>}
-              items={topRatedAnimeShows.map((item) => ({
-                ...item,
-                media_type: 'tv',
-                poster_path: item.poster_path || '',
-                backdrop_path: item.backdrop_path || '',
-                overview: item.overview || '',
-              }))}
-              mediaType="anime-top-rated-tmdb"
-            />
-          </LazySection>
-        )}
-
-        {keywordHighlightShows.length > 0 && (
-          <LazySection index={3} immediateLoadCount={IMMEDIATE_LOAD_COUNT}>
-            <EmblaCarousel
-              title={<span><span className="text-cyan-400 mr-2">✦</span><span>{t('animePage.keywordHighlights')}</span></span>}
-              items={keywordHighlightShows.map((item) => ({
-                ...item,
-                media_type: 'tv',
-                poster_path: item.poster_path || '',
-                backdrop_path: item.backdrop_path || '',
-                overview: item.overview || '',
-              }))}
-              mediaType="anime-keyword-highlights"
-              showRanking={true}
-            />
-          </LazySection>
-        )}
-
-        {keywordRecentShows.length > 0 && (
-          <LazySection index={4} immediateLoadCount={IMMEDIATE_LOAD_COUNT}>
-            <EmblaCarousel
-              title={<span><span className="text-sky-400 mr-2">⏱</span><span>{t('animePage.keywordRecent')}</span></span>}
-              items={keywordRecentShows.map((item) => ({
-                ...item,
-                media_type: 'tv',
-                poster_path: item.poster_path || '',
-                backdrop_path: item.backdrop_path || '',
-                overview: item.overview || '',
-              }))}
-              mediaType="anime-keyword-recent"
-            />
-          </LazySection>
-        )}
-
         {categories.map((category, index) => (
-          <LazySection key={category.id} index={5 + index} immediateLoadCount={IMMEDIATE_LOAD_COUNT}>
+          <LazySection key={category.id} index={1 + index} immediateLoadCount={IMMEDIATE_LOAD_COUNT}>
             <EmblaCarousel
               title={category.title}
               items={category.items.map((item) => ({

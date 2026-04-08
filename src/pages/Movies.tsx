@@ -14,6 +14,7 @@ import { encodeId } from '../utils/idEncoder';
 import TelegramPromotion from '../components/TelegramPromotion';
 import { useWrappedTracker } from '../hooks/useWrappedTracker';
 import { getTmdbLanguage } from '../i18n';
+import { getMinimumCarouselCategoryItems, makeExclusiveCategories } from '../utils/exclusiveCategories';
 
 // Nombre de sections à charger immédiatement
 const IMMEDIATE_LOAD_COUNT = 2;
@@ -1070,7 +1071,7 @@ const Movies: React.FC = () => {
     });
 
     // Convert the genre map to categories array
-    const newCategories: Category[] = Object.entries(genreMap)
+    const genreCategories: Category[] = Object.entries(genreMap)
       .map(([genreId, items]) => {
         // Remove any duplicates again just to be sure
         const uniqueItems = items.filter((movie, index, self) =>
@@ -1105,15 +1106,23 @@ const Movies: React.FC = () => {
       })
       .slice(0, 15); // Réduit de 40 à 15 pour de meilleures performances
 
+    const orderedCategories: Category[] = [];
+
     if (recentMovies.length >= 5) {
-      newCategories.unshift({
+      orderedCategories.push({
         id: 'recent-movies',
         title: t('home.recentMovies'),
         items: recentMovies
       });
     }
 
-    setCategories(newCategories);
+    orderedCategories.push(...genreCategories);
+
+    setCategories(makeExclusiveCategories(orderedCategories, {
+      minItems: getMinimumCarouselCategoryItems(),
+      limit: 10,
+      perCategoryLimit: 15
+    }));
   };
 
   useEffect(() => {

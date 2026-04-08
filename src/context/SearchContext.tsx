@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 import axios from 'axios';
 import i18n from '../i18n';
 import { getTmdbLanguage } from '../i18n';
+import { TmdbKeyword, fetchTmdbMediaKeywordIds, searchTmdbKeywords } from '../utils/tmdbKeywords';
 
 const TMDB_API_KEY = import.meta.env.VITE_TMDB_API_KEY || '';
 
@@ -72,6 +73,14 @@ interface SearchContextType {
   loadingAutocomplete: boolean;
   fetchAutocompleteSuggestions: (query: string) => Promise<void>;
   clearAutocompleteSuggestions: () => void;
+  selectedKeywords: TmdbKeyword[];
+  addKeyword: (keyword: TmdbKeyword) => void;
+  removeKeyword: (keywordId: number) => void;
+  clearKeywords: () => void;
+  keywordSuggestions: TmdbKeyword[];
+  loadingKeywordSuggestions: boolean;
+  fetchKeywordSuggestions: (query: string) => Promise<void>;
+  clearKeywordSuggestions: () => void;
   selectedLanguage: string;
   setSelectedLanguage: (language: string) => void;
   selectedCountry: string;
@@ -143,6 +152,9 @@ export const SearchProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [loadingSuggestions, setLoadingSuggestions] = useState(false);
   const [autocompleteSuggestions, setAutocompleteSuggestions] = useState<SearchResult[]>([]);
   const [loadingAutocomplete, setLoadingAutocomplete] = useState(false);
+  const [selectedKeywords, setSelectedKeywords] = useState<TmdbKeyword[]>([]);
+  const [keywordSuggestions, setKeywordSuggestions] = useState<TmdbKeyword[]>([]);
+  const [loadingKeywordSuggestions, setLoadingKeywordSuggestions] = useState(false);
   const [selectedLanguage, setSelectedLanguage] = useState<string>('');
   const [selectedCountry, setSelectedCountry] = useState<string>('');
 
@@ -273,14 +285,78 @@ export const SearchProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setAutocompleteSuggestions([]);
   };
 
+  const fetchKeywordSuggestions = async (searchQuery: string) => {
+    if (!searchQuery || searchQuery.length < 2) {
+      setKeywordSuggestions([]);
+      return;
+    }
+
+    setLoadingKeywordSuggestions(true);
+
+    try {
+      const suggestions = await searchTmdbKeywords(searchQuery, getTmdbLanguage());
+      setKeywordSuggestions(
+        suggestions.filter((keyword) => !selectedKeywords.some((selectedKeyword) => selectedKeyword.id === keyword.id))
+      );
+    } catch (error) {
+      console.error('Error fetching keyword suggestions:', error);
+      setKeywordSuggestions([]);
+    } finally {
+      setLoadingKeywordSuggestions(false);
+    }
+  };
+
+  const addKeyword = (keyword: TmdbKeyword) => {
+    setSelectedKeywords((prev) => (
+      prev.some((selectedKeyword) => selectedKeyword.id === keyword.id)
+        ? prev
+        : [...prev, keyword]
+    ));
+    setKeywordSuggestions((prev) => prev.filter((suggestion) => suggestion.id !== keyword.id));
+  };
+
+  const removeKeyword = (keywordId: number) => {
+    setSelectedKeywords((prev) => prev.filter((keyword) => keyword.id !== keywordId));
+  };
+
+  const clearKeywords = () => {
+    setSelectedKeywords([]);
+    setKeywordSuggestions([]);
+  };
+
+  const clearKeywordSuggestions = () => {
+    setKeywordSuggestions([]);
+  };
+
+  const filterResultsByKeywords = async (items: SearchResult[]) => {
+    if (selectedKeywords.length === 0 || items.length === 0) {
+      return items;
+    }
+
+    const selectedKeywordIds = selectedKeywords.map((keyword) => keyword.id);
+    const itemMatches = await Promise.all(
+      items.map(async (item) => {
+        try {
+          const itemKeywordIds = await fetchTmdbMediaKeywordIds(item.media_type, item.id);
+          return selectedKeywordIds.every((keywordId) => itemKeywordIds.includes(keywordId));
+        } catch (error) {
+          console.error(`Error fetching keywords for ${item.media_type} ${item.id}:`, error);
+          return false;
+        }
+      })
+    );
+
+    return items.filter((_item, index) => itemMatches[index]);
+  };
+
   const performSearch = async (pageNum: number, isNewSearch: boolean = false) => {
     // Modifier la définition de isGenreSearch pour ne pas dépendre de query
-    const hasFilters = selectedGenres.length > 0 || selectedType !== 'all' || minRating > 0 || director || actor || year || selectedLanguage || selectedCountry;
+    const hasFilters = selectedGenres.length > 0 || selectedType !== 'all' || minRating > 0 || director || actor || year || selectedKeywords.length > 0 || selectedLanguage || selectedCountry;
     const isGenreSearch = hasFilters;
 
     if ((!hasMore && !isNewSearch && !isGenreSearch) || isLoading) return;
 
-    if (!query && selectedGenres.length === 0 && selectedType === 'all' && minRating === 0 && !director && !actor && !year && !selectedLanguage && !selectedCountry) return;
+    if (!query && selectedGenres.length === 0 && selectedType === 'all' && minRating === 0 && !director && !actor && !year && selectedKeywords.length === 0 && !selectedLanguage && !selectedCountry) return;
 
     const loadingMore = !isNewSearch && isGenreSearch;
 
@@ -489,6 +565,10 @@ export const SearchProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
           return true;
         });
+
+        if (selectedKeywords.length > 0) {
+          tmdbInitialResults = await filterResultsByKeywords(tmdbInitialResults);
+        }
       }
 
       // Recherche TMDB supplémentaire si nécessaire
@@ -497,7 +577,7 @@ export const SearchProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       }
 
       // Recherche par filtres uniquement (sans query)
-      if (!query && (selectedGenres.length > 0 || selectedType !== 'all' || minRating > 0 || director || actor || year || selectedLanguage || selectedCountry)) {
+      if (!query && (selectedGenres.length > 0 || selectedType !== 'all' || minRating > 0 || director || actor || year || selectedKeywords.length > 0 || selectedLanguage || selectedCountry)) {
         const baseParams: any = {
           api_key: TMDB_API_KEY,
           with_genres: selectedGenres.join(','),
@@ -511,6 +591,9 @@ export const SearchProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         }
         if (selectedCountry) {
           baseParams.with_origin_country = selectedCountry;
+        }
+        if (selectedKeywords.length > 0) {
+          baseParams.with_keywords = selectedKeywords.map((keyword) => keyword.id).join(',');
         }
         if (year) {
           if (selectedType === 'movie' || selectedType === 'all') baseParams.primary_release_year = year;
@@ -754,6 +837,12 @@ export const SearchProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   }, [selectedCountry]);
 
+  // Reset page when selected keywords change
+  useEffect(() => {
+    setPage(1);
+
+  }, [selectedKeywords]);
+
   const value = {
     query,
     setQuery,
@@ -792,6 +881,14 @@ export const SearchProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     loadingAutocomplete,
     fetchAutocompleteSuggestions,
     clearAutocompleteSuggestions,
+    selectedKeywords,
+    addKeyword,
+    removeKeyword,
+    clearKeywords,
+    keywordSuggestions,
+    loadingKeywordSuggestions,
+    fetchKeywordSuggestions,
+    clearKeywordSuggestions,
     selectedLanguage,
     setSelectedLanguage,
     selectedCountry,

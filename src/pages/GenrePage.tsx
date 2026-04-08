@@ -10,6 +10,7 @@ import ShinyText from '../components/ui/shiny-text';
 import CustomDropdown from '../components/CustomDropdown';
 import { SearchGridCard, SearchListCard } from '../components/SearchCard';
 import { getTmdbLanguage } from '../i18n';
+import { resolveTmdbKeywordId } from '../utils/tmdbKeywords';
 
 // Genre IDs from TMDB
 const GENRES: Record<number, string> = {
@@ -221,6 +222,7 @@ const GenrePage: React.FC = () => {
       setLoading(true);
       try {
         const withGenres = isAnime && genreId !== '16' ? `16,${genreId}` : genreId;
+        const animeKeywordId = isAnime ? await resolveTmdbKeywordId('anime', getTmdbLanguage()) : null;
 
         const response = await axios.get(`https://api.themoviedb.org/3/discover/${resolvedMediaType}`, {
           params: {
@@ -232,7 +234,7 @@ const GenrePage: React.FC = () => {
             include_adult: false,
             'vote_count.gte': 5,
             include_video: false,
-            ...(isAnime ? { with_origin_country: 'JP' } : {})
+            ...(isAnime && animeKeywordId ? { with_keywords: String(animeKeywordId) } : {})
           }
         });
         const filtered = response.data.results.filter(

@@ -15,6 +15,7 @@ import { encodeId } from '../utils/idEncoder';
 import TelegramPromotion from '../components/TelegramPromotion';
 import { useWrappedTracker } from '../hooks/useWrappedTracker';
 import { getTmdbLanguage } from '../i18n';
+import { getMinimumCarouselCategoryItems, makeExclusiveCategories } from '../utils/exclusiveCategories';
 
 // Nombre de sections à charger immédiatement
 const IMMEDIATE_LOAD_COUNT = 2;
@@ -587,7 +588,7 @@ const TVShows: React.FC = () => {
     });
 
     // Convert the genre map to categories array
-    const newCategories: Category[] = Object.entries(genreMap)
+    const genreCategories: Category[] = Object.entries(genreMap)
       .map(([genreId, items]) => ({
         id: genreId,
         title: GENRES[Number(genreId)] || `Category ${genreId}`,
@@ -615,15 +616,23 @@ const TVShows: React.FC = () => {
       })
       .slice(0, 15); // Réduit de 40 à 15 pour de meilleures performances
 
+    const orderedCategories: Category[] = [];
+
     if (recentShows.length >= 5) {
-      newCategories.unshift({
+      orderedCategories.push({
         id: 'recent-shows',
         title: t('home.recentShows'),
         items: recentShows
       });
     }
 
-    setCategories(newCategories);
+    orderedCategories.push(...genreCategories);
+
+    setCategories(makeExclusiveCategories(orderedCategories, {
+      minItems: getMinimumCarouselCategoryItems(),
+      limit: 10,
+      perCategoryLimit: 15
+    }));
   };
 
   const fetchTVShows = async () => {

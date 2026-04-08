@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { Search as SearchIcon, Loader, Filter, Star, Calendar, User, Film, Award, X, LayoutGrid, List, ExternalLink, Globe } from 'lucide-react';
+import { Search as SearchIcon, Loader, Filter, Star, Calendar, User, Film, Award, X, LayoutGrid, List, ExternalLink, Globe, Tag } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useSearch } from '../context/SearchContext';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -58,10 +58,14 @@ const Search: React.FC = () => {
     const [showDirectorSuggestions, setShowDirectorSuggestions] = useState<boolean>(false);
     const [showActorSuggestions, setShowActorSuggestions] = useState<boolean>(false);
     const [showAutocomplete, setShowAutocomplete] = useState<boolean>(false);
+    const [showKeywordSuggestions, setShowKeywordSuggestions] = useState<boolean>(false);
+    const [keywordQuery, setKeywordQuery] = useState('');
     const directorInputRef = useRef<HTMLInputElement>(null);
     const actorInputRef = useRef<HTMLInputElement>(null);
+    const keywordInputRef = useRef<HTMLInputElement>(null);
     const directorSuggestionsRef = useRef<HTMLDivElement>(null);
     const actorSuggestionsRef = useRef<HTMLDivElement>(null);
+    const keywordSuggestionsRef = useRef<HTMLDivElement>(null);
     const searchInputRef = useRef<HTMLInputElement>(null);
     const autocompleteRef = useRef<HTMLDivElement>(null);
     const searchPerformedRef = useRef<boolean>(false);
@@ -100,6 +104,14 @@ const Search: React.FC = () => {
         loadingAutocomplete,
         fetchAutocompleteSuggestions,
         clearAutocompleteSuggestions,
+        selectedKeywords,
+        addKeyword,
+        removeKeyword,
+        clearKeywords,
+        keywordSuggestions,
+        loadingKeywordSuggestions,
+        fetchKeywordSuggestions,
+        clearKeywordSuggestions,
         selectedLanguage,
         setSelectedLanguage,
         selectedCountry,
@@ -215,6 +227,13 @@ const Search: React.FC = () => {
                 !searchInputRef.current.contains(event.target as Node)) {
                 setShowAutocomplete(false);
             }
+
+            if (keywordSuggestionsRef.current &&
+                !keywordSuggestionsRef.current.contains(event.target as Node) &&
+                keywordInputRef.current &&
+                !keywordInputRef.current.contains(event.target as Node)) {
+                setShowKeywordSuggestions(false);
+            }
         };
 
         document.addEventListener('mousedown', handleClickOutside);
@@ -246,6 +265,19 @@ const Search: React.FC = () => {
             setShowActorSuggestions(true);
         } else {
             setShowActorSuggestions(false);
+        }
+    };
+
+    const handleKeywordChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const value = e.target.value;
+        setKeywordQuery(value);
+
+        if (value.length >= 2) {
+            fetchKeywordSuggestions(value);
+            setShowKeywordSuggestions(true);
+        } else {
+            clearKeywordSuggestions();
+            setShowKeywordSuggestions(false);
         }
     };
 
@@ -285,9 +317,16 @@ const Search: React.FC = () => {
         setShowActorSuggestions(false);
     };
 
+    const handleSelectKeyword = (keyword: { id: number; name: string }) => {
+        addKeyword(keyword);
+        setKeywordQuery('');
+        clearKeywordSuggestions();
+        setShowKeywordSuggestions(false);
+    };
+
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
-        if (query || selectedGenres.length > 0 || selectedType !== 'all' || minRating > 0 || director || actor || year || selectedLanguage || selectedCountry) {
+        if (query || selectedGenres.length > 0 || selectedType !== 'all' || minRating > 0 || director || actor || year || selectedKeywords.length > 0 || selectedLanguage || selectedCountry) {
             if (query) {
                 const newUrl = `/search?q=${encodeURIComponent(query)}&page=1`;
                 if (window.location.pathname + window.location.search !== newUrl) {
@@ -360,6 +399,10 @@ const Search: React.FC = () => {
         setDirector('');
         setActor('');
         setYear('');
+        setKeywordQuery('');
+        clearKeywords();
+        clearKeywordSuggestions();
+        setShowKeywordSuggestions(false);
         setSelectedLanguage('');
         setSelectedCountry('');
         setTimeout(() => {
@@ -398,7 +441,7 @@ const Search: React.FC = () => {
         document.title = `${t('search.title')} - Movix`;
     }, []);
 
-    const filtersActive = showFilters || selectedGenres.length > 0 || director || actor || year || selectedLanguage || selectedCountry;
+    const filtersActive = showFilters || selectedGenres.length > 0 || director || actor || year || selectedKeywords.length > 0 || selectedLanguage || selectedCountry;
 
     return (
         <SquareBackground squareSize={48} borderColor="rgba(239, 68, 68, 0.10)" className="w-full min-h-screen bg-black text-white">
@@ -620,6 +663,95 @@ const Search: React.FC = () => {
                                                 label={t('search.hideNoContent')}
                                                 className="w-full md:w-auto"
                                             />
+                                        </motion.div>
+
+                                        {/* Keywords */}
+                                        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.28 }} className="relative">
+                                            <h3 className="text-sm font-semibold text-white/70 uppercase tracking-wider flex items-center gap-2 mb-3">
+                                                <Tag className="w-4 h-4" />
+                                                {t('search.keywords')}
+                                            </h3>
+                                            <div className="relative">
+                                                <input
+                                                    type="text"
+                                                    ref={keywordInputRef}
+                                                    value={keywordQuery}
+                                                    onChange={handleKeywordChange}
+                                                    onFocus={() => keywordQuery.length >= 2 && setShowKeywordSuggestions(true)}
+                                                    placeholder={t('search.keywordPlaceholder')}
+                                                    className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white placeholder:text-white/30 focus:outline-none focus:border-red-500/50 transition-colors pr-10"
+                                                />
+                                                {keywordQuery && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => {
+                                                            setKeywordQuery('');
+                                                            clearKeywordSuggestions();
+                                                            setShowKeywordSuggestions(false);
+                                                        }}
+                                                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-white/40 hover:text-white"
+                                                    >
+                                                        <X size={16} />
+                                                    </button>
+                                                )}
+
+                                                <AnimatePresence>
+                                                    {showKeywordSuggestions && (keywordSuggestions.length > 0 || loadingKeywordSuggestions || keywordQuery.length >= 2) && (
+                                                        <motion.div
+                                                            ref={keywordSuggestionsRef}
+                                                            initial={{ opacity: 0, y: -10 }}
+                                                            animate={{ opacity: 1, y: 0 }}
+                                                            exit={{ opacity: 0, y: -10 }}
+                                                            className="absolute z-50 left-0 right-0 mt-1 bg-black/90 backdrop-blur-xl border border-white/10 rounded-xl shadow-2xl overflow-y-auto max-h-80 custom-scrollbar"
+                                                        >
+                                                            {loadingKeywordSuggestions ? (
+                                                                <div className="flex items-center justify-center p-4">
+                                                                    <Loader className="w-5 h-5 text-white/40 animate-spin" />
+                                                                    <span className="ml-2 text-sm text-white/40">{t('search.searching')}</span>
+                                                                </div>
+                                                            ) : keywordSuggestions.length > 0 ? (
+                                                                <div>
+                                                                    {keywordSuggestions.map((keyword) => (
+                                                                        <button
+                                                                            key={keyword.id}
+                                                                            type="button"
+                                                                            onClick={() => handleSelectKeyword(keyword)}
+                                                                            className="w-full flex items-center gap-3 px-4 py-3 hover:bg-white/5 transition-colors text-left"
+                                                                        >
+                                                                            <Tag size={16} className="text-white/40" />
+                                                                            <span className="text-sm font-medium">{keyword.name}</span>
+                                                                        </button>
+                                                                    ))}
+                                                                </div>
+                                                            ) : (
+                                                                <div className="px-4 py-3 text-sm text-white/40">
+                                                                    {t('search.noKeywordResults')}
+                                                                </div>
+                                                            )}
+                                                        </motion.div>
+                                                    )}
+                                                </AnimatePresence>
+                                            </div>
+
+                                            {selectedKeywords.length > 0 && (
+                                                <div className="flex flex-wrap gap-2 mt-3">
+                                                    {selectedKeywords.map((keyword) => (
+                                                        <button
+                                                            key={keyword.id}
+                                                            type="button"
+                                                            onClick={() => removeKeyword(keyword.id)}
+                                                            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-red-600/15 border border-red-500/30 text-sm text-white hover:bg-red-600/25 transition-colors"
+                                                        >
+                                                            <span>{keyword.name}</span>
+                                                            <X size={14} />
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            )}
+
+                                            <p className="text-xs text-white/40 mt-3">
+                                                {t('search.keywordHint')}
+                                            </p>
                                         </motion.div>
 
                                         {/* Director / Actor / Year */}
