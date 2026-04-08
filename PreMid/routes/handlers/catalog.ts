@@ -1,4 +1,5 @@
-﻿import {
+import type { RoutePresenceContext } from '../types.js'
+import {
   ROUTE_COLLECTION_PATTERN,
   ROUTE_DOWNLOAD_PATTERN,
   ROUTE_GENRE_PATTERN,
@@ -19,7 +20,6 @@ import {
   shortenId,
 } from '../../core/utils.js'
 import { finalizeRoutePresence } from '../helpers.js'
-import type { RoutePresenceContext } from '../types.js'
 
 export async function handleCatalogRoutes(
   context: RoutePresenceContext,
@@ -337,4 +337,3 @@ export async function handleCatalogRoutes(
 
   return null
 }
-

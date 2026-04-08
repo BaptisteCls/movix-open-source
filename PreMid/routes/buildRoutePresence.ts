@@ -1,9 +1,9 @@
-﻿import { createPagePresence } from '../core/utils.js'
-import { createRoutePresenceContext, finalizeRoutePresence } from './helpers.js'
+import type { RoutePresenceHandler } from './types.js'
+import { createPagePresence } from '../core/utils.js'
 import { handleCatalogRoutes } from './handlers/catalog.js'
 import { handleMiscRoutes } from './handlers/misc.js'
 import { handleWatchRoutes } from './handlers/watch.js'
-import type { RoutePresenceHandler } from './types.js'
+import { createRoutePresenceContext, finalizeRoutePresence } from './helpers.js'
 
 const routePresenceHandlers: RoutePresenceHandler[] = [
   handleCatalogRoutes,
@@ -33,4 +33,3 @@ export async function buildRoutePresence(
     ),
   )
 }
-
